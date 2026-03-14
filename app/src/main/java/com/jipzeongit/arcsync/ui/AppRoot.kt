@@ -38,32 +38,23 @@ fun AppRoot(settingsRepository: SettingsRepository) {
     val currentRoute = currentRoute(navController)
     val showBottomBar = currentRoute == Routes.DRIVERS || currentRoute == Routes.SETTINGS
 
+    val items = listOf(
+        NavItem(Routes.DRIVERS, "驱动", Icons.Filled.Build),
+        NavItem(Routes.SETTINGS, "设置", Icons.Filled.Settings)
+    )
+
     Scaffold(
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar {
-                    NavigationBarItem(
-                        selected = currentRoute == Routes.DRIVERS,
-                        onClick = {
-                            navController.navigate(Routes.DRIVERS) {
-                                popUpTo(navController.graph.startDestinationId) { inclusive = false }
-                                launchSingleTop = true
-                            }
-                        },
-                        icon = { Icon(Icons.Filled.Build, contentDescription = "Drivers") },
-                        label = { Text("驱动") }
-                    )
-                    NavigationBarItem(
-                        selected = currentRoute == Routes.SETTINGS,
-                        onClick = {
-                            navController.navigate(Routes.SETTINGS) {
-                                popUpTo(navController.graph.startDestinationId) { inclusive = false }
-                                launchSingleTop = true
-                            }
-                        },
-                        icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
-                        label = { Text("设置") }
-                    )
+                    items.forEach { item ->
+                        NavigationBarItem(
+                            selected = currentRoute == item.route,
+                            onClick = { navController.navigate(item.route) },
+                            icon = { Icon(item.icon, contentDescription = item.label) },
+                            label = { Text(item.label) }
+                        )
+                    }
                 }
             }
         }
@@ -103,6 +94,12 @@ fun AppRoot(settingsRepository: SettingsRepository) {
         }
     }
 }
+
+private data class NavItem(
+    val route: String,
+    val label: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
+)
 
 private object Routes {
     const val DRIVERS = "drivers"
