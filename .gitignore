@@ -1,0 +1,35 @@
+# Gradle
+.gradle/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Build outputs
+/build/
+*/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Artifacts
+*.apk
+*.ap_
+*.aab
+
+# Logs and temp
+*.log
+*.tmp
+*.hprof
+.DS_Store
+
+# Keystores
+*.jks
+*.keystore
+
+# Local Gradle distribution
+/gradle-8.7-bin/
+/gradle-8.7-bin.zip
