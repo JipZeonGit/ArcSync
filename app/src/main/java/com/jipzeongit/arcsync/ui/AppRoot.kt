@@ -38,23 +38,22 @@ fun AppRoot(settingsRepository: SettingsRepository) {
     val currentRoute = currentRoute(navController)
     val showBottomBar = currentRoute == Routes.DRIVERS || currentRoute == Routes.SETTINGS
 
-    val items = listOf(
-        NavItem(Routes.DRIVERS, "驱动", Icons.Filled.Build),
-        NavItem(Routes.SETTINGS, "设置", Icons.Filled.Settings)
-    )
-
     Scaffold(
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar {
-                    items.forEach { item ->
-                        NavigationBarItem(
-                            selected = currentRoute == item.route,
-                            onClick = { navController.navigate(item.route) },
-                            icon = { Icon(item.icon, contentDescription = item.label) },
-                            label = { Text(item.label) }
-                        )
-                    }
+                    NavigationBarItem(
+                        selected = currentRoute == Routes.DRIVERS,
+                        onClick = { navController.navigate(Routes.DRIVERS) },
+                        icon = { Icon(Icons.Filled.Build, contentDescription = "驱动") },
+                        label = { Text("驱动") }
+                    )
+                    NavigationBarItem(
+                        selected = currentRoute == Routes.SETTINGS,
+                        onClick = { navController.navigate(Routes.SETTINGS) },
+                        icon = { Icon(Icons.Filled.Settings, contentDescription = "设置") },
+                        label = { Text("设置") }
+                    )
                 }
             }
         }
@@ -94,12 +93,6 @@ fun AppRoot(settingsRepository: SettingsRepository) {
         }
     }
 }
-
-private data class NavItem(
-    val route: String,
-    val label: String,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector
-)
 
 private object Routes {
     const val DRIVERS = "drivers"
