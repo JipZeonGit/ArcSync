@@ -159,7 +159,7 @@ class IntelArcRepository {
     companion object {
         private const val EN_URL = "https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html"
         private const val CN_URL = "https://www.intel.cn/content/www/cn/zh/download/785597/intel-arc-graphics-windows.html"
-        private const val USER_AGENT = "ArcSync/${Build.VERSION.SDK_INT}"
+        private val USER_AGENT = "ArcSync/${Build.VERSION.SDK_INT}"
 
         private val INTRO_LABELS = listOf("Introduction", "介绍")
         private val DOWNLOADS_LABELS = listOf("Available Downloads", "可供下载")
