@@ -55,8 +55,9 @@ private fun appendNode(builder: AnnotatedString.Builder, node: Node, indent: Int
                         node.childNodes().forEach { child -> appendNode(this, child, indent, baseUrl) }
                     }
                 }
-                "ul" -> {
+                "ul", "ol" -> {
                     node.childNodes().forEach { child -> appendNode(builder, child, indent + 1, baseUrl) }
+                    builder.append("\n")
                 }
                 "li" -> {
                     builder.append("\n")

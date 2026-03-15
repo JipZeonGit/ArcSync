@@ -10,12 +10,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
@@ -25,7 +29,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -35,8 +38,8 @@ import com.jipzeongit.arcsync.data.DriverSummary
 import com.jipzeongit.arcsync.data.DriversUiState
 import com.jipzeongit.arcsync.data.DriversViewModel
 import java.util.Locale
-import kotlinx.coroutines.flow.distinctUntilChanged
 
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 fun DriversScreen(
     viewModel: DriversViewModel,
@@ -44,18 +47,15 @@ fun DriversScreen(
     onOpenDownload: (String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = isRefreshing,
+        onRefresh = { viewModel.refreshDrivers() }
+    )
 
     LaunchedEffect(Unit) {
         viewModel.loadDrivers()
-    }
-
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isAtEnd() }
-            .distinctUntilChanged()
-            .collect { atEnd ->
-                if (atEnd) viewModel.loadMore()
-            }
     }
 
     when (val ui = uiState) {
@@ -68,12 +68,15 @@ fun DriversScreen(
             ErrorState(message = ui.message, onRetry = { viewModel.loadDrivers() })
         }
         is DriversUiState.Data -> {
-            DriversList(
-                drivers = ui.drivers,
-                listState = listState,
-                onOpenDetail = onOpenDetail,
-                onOpenDownload = onOpenDownload
-            )
+            Box(Modifier.fillMaxSize().pullRefresh(pullRefreshState)) {
+                DriversList(
+                    drivers = ui.drivers,
+                    listState = listState,
+                    showRefreshing = isRefreshing,
+                    onOpenDetail = onOpenDetail,
+                    onOpenDownload = onOpenDownload
+                )
+            }
         }
     }
 }
@@ -82,6 +85,7 @@ fun DriversScreen(
 private fun DriversList(
     drivers: List<DriverSummary>,
     listState: LazyListState,
+    showRefreshing: Boolean,
     onOpenDetail: (String) -> Unit,
     onOpenDownload: (String) -> Unit
 ) {
@@ -96,6 +100,15 @@ private fun DriversList(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+                if (showRefreshing) {
+            item {
+                Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+        }
+
         items(drivers) { driver ->
             ElevatedCard(
                 modifier = Modifier
@@ -143,7 +156,3 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
     }
 }
 
-private fun LazyListState.isAtEnd(): Boolean {
-    val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return false
-    return lastVisible >= layoutInfo.totalItemsCount - 1
-}

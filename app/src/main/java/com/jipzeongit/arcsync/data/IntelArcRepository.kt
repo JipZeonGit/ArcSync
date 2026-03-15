@@ -1,6 +1,7 @@
 ﻿package com.jipzeongit.arcsync.data
 
 import java.io.IOException
+import java.net.URI
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
@@ -49,8 +50,8 @@ class IntelArcRepository {
             }
         }
 
-        val sorted = summaries.distinctBy { it.version }.sortedByDescending { it.date }
-        listCache += sorted
+        val ordered = summaries.distinctBy { it.version }
+        listCache += ordered
         return@withContext listCache
     }
 
@@ -62,6 +63,11 @@ class IntelArcRepository {
         val detail = parseDetail(doc, detailUrl)
         detailCache[detailUrl] = detail
         return@withContext detail
+    }
+
+    fun clearCache() {
+        detailCache.clear()
+        listCache.clear()
     }
 
     private fun fetchDocument(url: String): Document {
@@ -99,9 +105,12 @@ class IntelArcRepository {
 
     private fun parseDetail(doc: Document, detailUrl: String): DriverDetail {
         val jsonDetail = extractJsonDetail(doc)
-
+        val metaVersion = extractMetaContent(doc, listOf("DownloadVersion"))
+        val metaDate = extractMetaDate(doc)
+        val metaDownloadUrl = extractMetaContent(doc, listOf("RecommendedDownloadUrl"))
         val version = sanitizeVersion(
-            jsonDetail?.version
+            metaVersion
+                .ifBlank { jsonDetail?.version.orEmpty() }
                 ?: extractValueByLabels(
                     doc,
                     listOf("Version", "版本", "Driver Version", "驱动程序版本"),
@@ -110,7 +119,8 @@ class IntelArcRepository {
                 ).ifBlank { extractVersionFromText(doc) }
         )
         val date = sanitizeValue(
-            jsonDetail?.date
+            metaDate
+                .ifBlank { jsonDetail?.date.orEmpty() }
                 ?: extractValueByLabels(
                     doc,
                     listOf("Date", "日期", "Release Date", "发布日期"),
@@ -136,7 +146,6 @@ class IntelArcRepository {
                     requireMatch = SHA256_REGEX
                 ).ifBlank { extractSha256FromText(doc) }
         )
-
         val downloadLink = jsonDetail?.downloadUrl ?: doc.select("a[href]")
             .firstOrNull { el ->
                 val text = el.text().lowercase(Locale.getDefault())
@@ -145,7 +154,8 @@ class IntelArcRepository {
             }
             ?.absUrl("href")
             .orEmpty()
-
+            .ifBlank { metaDownloadUrl }
+            .ifBlank { extractDownloadUrl(doc) }
         val summary = DriverSummary(
             version = if (version.isNotBlank()) version else "Unknown",
             date = if (date.isNotBlank()) date else "Unknown",
@@ -170,6 +180,16 @@ class IntelArcRepository {
     }
 
     private fun extractDetailUrls(doc: Document): List<String> {
+        val optionUrls = doc.select("select#version-driver-select option[value], select[name=version-driver-select] option[value], select option[value]")
+            .mapNotNull { it.attr("value")?.trim()?.takeIf { v -> v.isNotBlank() } }
+            .filter { value ->
+                value.contains("/download/") && value.contains("intel-arc-graphics-windows")
+            }
+            .map { toAbsoluteUrl(doc, it) }
+            .distinct()
+
+        if (optionUrls.isNotEmpty()) return optionUrls.take(MAX_VERSIONS)
+
         val urls = doc.select("a[href]")
             .mapNotNull { it.absUrl("href") }
             .filter { href ->
@@ -177,12 +197,13 @@ class IntelArcRepository {
             }
             .distinct()
 
-        if (urls.isNotEmpty()) return urls
+        if (urls.isNotEmpty()) return urls.take(MAX_VERSIONS)
 
         return doc.select("a[href]")
             .mapNotNull { it.absUrl("href") }
             .filter { href -> href.contains("/download/") && href.contains("intel") }
             .distinct()
+            .take(MAX_VERSIONS)
     }
 
     private fun extractValueByLabels(
@@ -229,6 +250,21 @@ class IntelArcRepository {
                 }
             }
         }
+
+        // Try list item "Label: value"
+        doc.select("li").forEach { li ->
+            val text = li.text().trim()
+            val lower = text.lowercase(Locale.getDefault())
+            if (labelSet.any { label -> lower.startsWith(label) }) {
+                val v = when {
+                    text.contains("：") -> text.substringAfter("：").trim()
+                    text.contains(":") -> text.substringAfter(":").trim()
+                    else -> ""
+                }
+                if (isAcceptableValue(v, maxLen, requireMatch)) return v
+            }
+        }
+
 
 
         // Try label + span pattern (Intel banner blocks)
@@ -329,6 +365,49 @@ class IntelArcRepository {
         return null
     }
 
+    private fun extractMetaContent(doc: Document, names: List<String>): String {
+        for (name in names) {
+            val v = doc.selectFirst("meta[name=$name]")?.attr("content")?.trim().orEmpty()
+            if (v.isNotBlank()) return v
+        }
+        return ""
+    }
+
+    private fun extractMetaDate(doc: Document): String {
+        val raw = extractMetaContent(doc, listOf("LastUpdate", "lastModifieddate"))
+        val match = DATE_VALUE_REGEX.find(raw)
+        return match?.value.orEmpty()
+    }
+
+
+    private fun toAbsoluteUrl(doc: Document, value: String): String {
+        if (value.startsWith("http://", true) || value.startsWith("https://", true)) return value
+        return runCatching { URI(doc.baseUri()).resolve(value).toString() }.getOrDefault(value)
+    }
+
+    private fun extractDownloadUrl(doc: Document): String {
+        val buttonUrl = doc.select("button[data-href]")
+            .mapNotNull { it.attr("data-href")?.trim() }
+            .firstOrNull { it.contains("download", ignoreCase = true) || it.endsWith(".exe", true) }
+            .orEmpty()
+
+        if (buttonUrl.isNotBlank()) {
+            return if (buttonUrl.startsWith("http", ignoreCase = true)) {
+                buttonUrl
+            } else {
+                runCatching { URI(doc.baseUri()).resolve(buttonUrl).toString() }.getOrDefault(buttonUrl)
+            }
+        }
+
+        val anchorUrl = doc.select("a[href]")
+            .mapNotNull { it.absUrl("href") }
+            .firstOrNull { it.contains("download", ignoreCase = true) }
+            .orEmpty()
+
+        return anchorUrl
+    }
+
+
     private fun normalizeSize(raw: String): String {
         val v = raw.trim()
         if (v.isBlank()) return v
@@ -374,6 +453,7 @@ class IntelArcRepository {
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         private const val ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
         private const val ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        private const val MAX_VERSIONS = 8
 
         private val INTRO_LABELS = listOf("Introduction", "介绍")
         private val DOWNLOADS_LABELS = listOf("Available Downloads", "可供下载")
@@ -419,6 +499,8 @@ private class InMemoryCookieJar : CookieJar {
         return store[url.host] ?: emptyList()
     }
 }
+
+
 
 
 

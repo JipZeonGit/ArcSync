@@ -10,10 +10,7 @@ import kotlinx.coroutines.launch
 sealed class DriversUiState {
     data object Loading : DriversUiState()
     data class Error(val message: String) : DriversUiState()
-    data class Data(
-        val drivers: List<DriverSummary>,
-        val canLoadMore: Boolean
-    ) : DriversUiState()
+    data class Data(val drivers: List<DriverSummary>) : DriversUiState()
 }
 
 sealed class DriverDetailState {
@@ -28,11 +25,13 @@ class DriversViewModel(
     private val _uiState = MutableStateFlow<DriversUiState>(DriversUiState.Loading)
     val uiState: StateFlow<DriversUiState> = _uiState.asStateFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     private val _detailState = MutableStateFlow<DriverDetailState>(DriverDetailState.Loading)
     val detailState: StateFlow<DriverDetailState> = _detailState.asStateFlow()
 
     private var allDrivers: List<DriverSummary> = emptyList()
-    private var visibleCount = 0
 
     fun loadDrivers() {
         if (_uiState.value is DriversUiState.Data) return
@@ -40,20 +39,27 @@ class DriversViewModel(
         viewModelScope.launch {
             try {
                 allDrivers = repository.fetchAllDrivers()
-                visibleCount = INITIAL_VISIBLE.coerceAtMost(allDrivers.size)
-                emitVisible()
+                _uiState.value = DriversUiState.Data(allDrivers)
             } catch (t: Throwable) {
                 _uiState.value = DriversUiState.Error(t.message ?: "Unknown error")
             }
         }
     }
 
-    fun loadMore() {
-        if (allDrivers.isEmpty()) return
-        val next = (visibleCount + PAGE_SIZE).coerceAtMost(allDrivers.size)
-        if (next == visibleCount) return
-        visibleCount = next
-        emitVisible()
+    fun refreshDrivers() {
+        if (_isRefreshing.value) return
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            try {
+                repository.clearCache()
+                allDrivers = repository.fetchAllDrivers()
+                _uiState.value = DriversUiState.Data(allDrivers)
+            } catch (t: Throwable) {
+                _uiState.value = DriversUiState.Error(t.message ?: "Unknown error")
+            } finally {
+                _isRefreshing.value = false
+            }
+        }
     }
 
     fun loadDetail(detailUrl: String) {
@@ -66,18 +72,5 @@ class DriversViewModel(
                 _detailState.value = DriverDetailState.Error(t.message ?: "Unknown error")
             }
         }
-    }
-
-    private fun emitVisible() {
-        val slice = allDrivers.take(visibleCount)
-        _uiState.value = DriversUiState.Data(
-            drivers = slice,
-            canLoadMore = visibleCount < allDrivers.size
-        )
-    }
-
-    companion object {
-        private const val INITIAL_VISIBLE = 6
-        private const val PAGE_SIZE = 6
     }
 }
