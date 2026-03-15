@@ -1,6 +1,5 @@
 ﻿package com.jipzeongit.arcsync.data
 
-import android.os.Build
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,10 +15,7 @@ class IntelArcRepository {
         if (listCache.isNotEmpty()) return@withContext listCache
 
         val url = if (isChinese()) CN_URL else EN_URL
-        val doc = Jsoup.connect(url)
-            .userAgent(USER_AGENT)
-            .timeout(15000)
-            .get()
+        val doc = connect(url)
 
         val detailUrls = extractDetailUrls(doc)
         val summaries = mutableListOf<DriverSummary>()
@@ -30,10 +26,7 @@ class IntelArcRepository {
             summaries += detail.summary
         } else {
             for (detailUrl in detailUrls) {
-                val detailDoc = Jsoup.connect(detailUrl)
-                    .userAgent(USER_AGENT)
-                    .timeout(15000)
-                    .get()
+                val detailDoc = connect(detailUrl)
                 val detail = parseDetail(detailDoc, detailUrl)
                 detailCache[detailUrl] = detail
                 summaries += detail.summary
@@ -48,13 +41,18 @@ class IntelArcRepository {
     suspend fun fetchDriverDetail(detailUrl: String): DriverDetail = withContext(Dispatchers.IO) {
         detailCache[detailUrl]?.let { return@withContext it }
 
-        val doc = Jsoup.connect(detailUrl)
-            .userAgent(USER_AGENT)
-            .timeout(15000)
-            .get()
+        val doc = connect(detailUrl)
         val detail = parseDetail(doc, detailUrl)
         detailCache[detailUrl] = detail
         return@withContext detail
+    }
+
+    private fun connect(url: String): Document {
+        return Jsoup.connect(url)
+            .userAgent(USER_AGENT)
+            .header("Accept-Language", ACCEPT_LANGUAGE)
+            .timeout(10000)
+            .get()
     }
 
     private fun parseDetail(doc: Document, detailUrl: String): DriverDetail {
@@ -159,7 +157,8 @@ class IntelArcRepository {
     companion object {
         private const val EN_URL = "https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html"
         private const val CN_URL = "https://www.intel.cn/content/www/cn/zh/download/785597/intel-arc-graphics-windows.html"
-        private val USER_AGENT = "ArcSync/${Build.VERSION.SDK_INT}"
+        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        private const val ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
 
         private val INTRO_LABELS = listOf("Introduction", "介绍")
         private val DOWNLOADS_LABELS = listOf("Available Downloads", "可供下载")
