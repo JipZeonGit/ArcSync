@@ -66,6 +66,7 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.jsoup)
+    implementation(libs.okhttp)
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

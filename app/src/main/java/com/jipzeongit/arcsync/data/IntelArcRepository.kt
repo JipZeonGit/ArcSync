@@ -1,8 +1,15 @@
 ﻿package com.jipzeongit.arcsync.data
 
+import java.io.IOException
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -11,11 +18,19 @@ class IntelArcRepository {
     private val detailCache = mutableMapOf<String, DriverDetail>()
     private val listCache = mutableListOf<DriverSummary>()
 
+    private val cookieJar = InMemoryCookieJar()
+    private val client = OkHttpClient.Builder()
+        .cookieJar(cookieJar)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
+
     suspend fun fetchAllDrivers(): List<DriverSummary> = withContext(Dispatchers.IO) {
         if (listCache.isNotEmpty()) return@withContext listCache
 
         val url = if (isChinese()) CN_URL else EN_URL
-        val doc = connect(url)
+        seedCookies(url)
+        val doc = fetchDocument(url)
 
         val detailUrls = extractDetailUrls(doc)
         val summaries = mutableListOf<DriverSummary>()
@@ -26,7 +41,8 @@ class IntelArcRepository {
             summaries += detail.summary
         } else {
             for (detailUrl in detailUrls) {
-                val detailDoc = connect(detailUrl)
+                seedCookies(detailUrl)
+                val detailDoc = fetchDocument(detailUrl)
                 val detail = parseDetail(detailDoc, detailUrl)
                 detailCache[detailUrl] = detail
                 summaries += detail.summary
@@ -41,18 +57,44 @@ class IntelArcRepository {
     suspend fun fetchDriverDetail(detailUrl: String): DriverDetail = withContext(Dispatchers.IO) {
         detailCache[detailUrl]?.let { return@withContext it }
 
-        val doc = connect(detailUrl)
+        seedCookies(detailUrl)
+        val doc = fetchDocument(detailUrl)
         val detail = parseDetail(doc, detailUrl)
         detailCache[detailUrl] = detail
         return@withContext detail
     }
 
-    private fun connect(url: String): Document {
-        return Jsoup.connect(url)
-            .userAgent(USER_AGENT)
+    private fun fetchDocument(url: String): Document {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", ACCEPT)
             .header("Accept-Language", ACCEPT_LANGUAGE)
-            .timeout(10000)
-            .get()
+            .header("Referer", refererFor(url))
+            .build()
+
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            response.close()
+            throw IOException("HTTP error ${response.code} for $url")
+        }
+        val body = response.body?.string().orEmpty()
+        response.close()
+        return Jsoup.parse(body, url)
+    }
+
+    private fun seedCookies(url: String) {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", ACCEPT)
+            .header("Accept-Language", ACCEPT_LANGUAGE)
+            .build()
+        client.newCall(request).execute().close()
+    }
+
+    private fun refererFor(url: String): String {
+        return if (url.contains("intel.cn")) CN_URL else EN_URL
     }
 
     private fun parseDetail(doc: Document, detailUrl: String): DriverDetail {
@@ -159,10 +201,27 @@ class IntelArcRepository {
         private const val CN_URL = "https://www.intel.cn/content/www/cn/zh/download/785597/intel-arc-graphics-windows.html"
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         private const val ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
+        private const val ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
 
         private val INTRO_LABELS = listOf("Introduction", "介绍")
         private val DOWNLOADS_LABELS = listOf("Available Downloads", "可供下载")
         private val DETAIL_LABELS = listOf("Detailed Description", "详细说明")
         private val VALID_LABELS = listOf("This download is valid for the product(s) listed below", "此下载对下面列出的产品有效")
+    }
+}
+
+private class InMemoryCookieJar : CookieJar {
+    private val store = ConcurrentHashMap<String, MutableList<Cookie>>()
+
+    override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+        val key = url.host
+        val existing = store[key] ?: mutableListOf()
+        existing.removeAll { cookie -> cookies.any { it.name == cookie.name } }
+        existing.addAll(cookies)
+        store[key] = existing
+    }
+
+    override fun loadForRequest(url: HttpUrl): List<Cookie> {
+        return store[url.host] ?: emptyList()
     }
 }
