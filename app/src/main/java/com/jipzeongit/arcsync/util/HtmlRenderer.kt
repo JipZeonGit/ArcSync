@@ -9,13 +9,14 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import java.net.URI
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
 
 @Composable
-fun HtmlText(html: String, onOpenUrl: (String) -> Unit) {
-    val annotated = remember(html) { htmlToAnnotatedString(html) }
+fun HtmlText(html: String, onOpenUrl: (String) -> Unit, baseUrl: String? = null) {
+    val annotated = remember(html, baseUrl) { htmlToAnnotatedString(html, baseUrl) }
     ClickableText(
         text = annotated,
         style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -26,20 +27,20 @@ fun HtmlText(html: String, onOpenUrl: (String) -> Unit) {
     )
 }
 
-fun htmlToAnnotatedString(html: String): AnnotatedString {
+fun htmlToAnnotatedString(html: String, baseUrl: String? = null): AnnotatedString {
     if (html.isBlank()) return AnnotatedString("")
 
     val doc = Jsoup.parseBodyFragment(html)
     val builder = AnnotatedString.Builder()
 
     doc.body().childNodes().forEach { node ->
-        appendNode(builder, node, 0)
+        appendNode(builder, node, 0, baseUrl)
     }
 
     return builder.toAnnotatedString()
 }
 
-private fun appendNode(builder: AnnotatedString.Builder, node: Node, indent: Int) {
+private fun appendNode(builder: AnnotatedString.Builder, node: Node, indent: Int, baseUrl: String?) {
     when (node) {
         is TextNode -> {
             val text = node.text().replace("\u00A0", " ")
@@ -51,48 +52,60 @@ private fun appendNode(builder: AnnotatedString.Builder, node: Node, indent: Int
                 "br" -> builder.append("\n")
                 "b", "strong" -> {
                     builder.withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-                        node.childNodes().forEach { child -> appendNode(this, child, indent) }
+                        node.childNodes().forEach { child -> appendNode(this, child, indent, baseUrl) }
                     }
                 }
                 "ul" -> {
-                    node.childNodes().forEach { child -> appendNode(builder, child, indent + 1) }
+                    node.childNodes().forEach { child -> appendNode(builder, child, indent + 1, baseUrl) }
                 }
                 "li" -> {
                     builder.append("\n")
                     builder.append("  ".repeat(indent))
                     builder.append("• ")
-                    node.childNodes().forEach { child -> appendNode(builder, child, indent) }
+                    node.childNodes().forEach { child -> appendNode(builder, child, indent, baseUrl) }
                 }
                 "a" -> {
                     val href = node.attr("href")
+                    val resolved = resolveHref(baseUrl, href)
                     val start = builder.length
-                    node.childNodes().forEach { child -> appendNode(builder, child, indent) }
+                    node.childNodes().forEach { child -> appendNode(builder, child, indent, baseUrl) }
                     val end = builder.length
-                    if (href.isNotBlank()) {
-                        builder.addStringAnnotation("URL", href, start, end)
+                    if (resolved.isNotBlank()) {
+                        builder.addStringAnnotation("URL", resolved, start, end)
                         builder.addStyle(SpanStyle(textDecoration = TextDecoration.Underline), start, end)
                     }
                 }
                 "p", "div", "section" -> {
-                    node.childNodes().forEach { child -> appendNode(builder, child, indent) }
+                    node.childNodes().forEach { child -> appendNode(builder, child, indent, baseUrl) }
                     builder.append("\n\n")
                 }
                 "table" -> {
-                    node.childNodes().forEach { child -> appendNode(builder, child, indent) }
+                    node.childNodes().forEach { child -> appendNode(builder, child, indent, baseUrl) }
                     builder.append("\n")
                 }
                 "tr" -> {
-                    node.childNodes().forEach { child -> appendNode(builder, child, indent) }
+                    node.childNodes().forEach { child -> appendNode(builder, child, indent, baseUrl) }
                     builder.append("\n")
                 }
                 "td", "th" -> {
-                    node.childNodes().forEach { child -> appendNode(builder, child, indent) }
+                    node.childNodes().forEach { child -> appendNode(builder, child, indent, baseUrl) }
                     builder.append(" | ")
                 }
                 else -> {
-                    node.childNodes().forEach { child -> appendNode(builder, child, indent) }
+                    node.childNodes().forEach { child -> appendNode(builder, child, indent, baseUrl) }
                 }
             }
         }
+    }
+}
+
+private fun resolveHref(baseUrl: String?, href: String): String {
+    if (href.isBlank()) return ""
+    if (href.startsWith("http://") || href.startsWith("https://")) return href
+    if (baseUrl.isNullOrBlank()) return href
+    return try {
+        URI(baseUrl).resolve(href).toString()
+    } catch (_: Exception) {
+        href
     }
 }

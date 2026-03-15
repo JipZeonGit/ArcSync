@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jipzeongit.arcsync.data.DriverSummary
 import com.jipzeongit.arcsync.data.DriversUiState
 import com.jipzeongit.arcsync.data.DriversViewModel
+import java.util.Locale
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
@@ -84,6 +85,12 @@ private fun DriversList(
     onOpenDetail: (String) -> Unit,
     onOpenDownload: (String) -> Unit
 ) {
+    val isZh = Locale.getDefault().language.startsWith("zh")
+    val dateLabel = if (isZh) "日期" else "Date"
+    val sizeLabel = if (isZh) "大小" else "Size"
+    val shaLabel = "SHA256"
+    val downloadLabel = if (isZh) "下载" else "Download"
+
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -102,13 +109,13 @@ private fun DriversList(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(driver.version, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.height(6.dp))
-                        Text("Date: ${driver.date}", style = MaterialTheme.typography.bodyMedium)
-                        Text("Size: ${driver.size}", style = MaterialTheme.typography.bodyMedium)
-                        Text("SHA256: ${driver.sha256}", style = MaterialTheme.typography.bodyMedium)
+                        Text("$dateLabel: ${driver.date}", style = MaterialTheme.typography.bodyMedium)
+                        Text("$sizeLabel: ${driver.size}", style = MaterialTheme.typography.bodyMedium)
+                        Text("$shaLabel: ${driver.sha256}", style = MaterialTheme.typography.bodyMedium)
                     }
                     Icon(
                         imageVector = Icons.Filled.Download,
-                        contentDescription = "Download",
+                        contentDescription = downloadLabel,
                         modifier = Modifier
                             .padding(start = 12.dp)
                             .clickable(enabled = driver.downloadUrl.isNotBlank()) {
@@ -124,12 +131,13 @@ private fun DriversList(
 
 @Composable
 private fun ErrorState(message: String, onRetry: () -> Unit) {
+    val isZh = Locale.getDefault().language.startsWith("zh")
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Load failed: $message")
+            Text(if (isZh) "加载失败：$message" else "Load failed: $message")
             Spacer(Modifier.height(12.dp))
             TextButton(onClick = onRetry) {
-                Text("Retry")
+                Text(if (isZh) "重试" else "Retry")
             }
         }
     }

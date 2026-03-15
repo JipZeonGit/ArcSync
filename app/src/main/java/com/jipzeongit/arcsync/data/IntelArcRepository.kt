@@ -98,20 +98,46 @@ class IntelArcRepository {
     }
 
     private fun parseDetail(doc: Document, detailUrl: String): DriverDetail {
+        val jsonDetail = extractJsonDetail(doc)
+
         val version = sanitizeVersion(
-            extractValueByLabels(doc, listOf("Version", "版本")).ifBlank { extractVersionFromText(doc) }
+            jsonDetail?.version
+                ?: extractValueByLabels(
+                    doc,
+                    listOf("Version", "版本", "Driver Version", "驱动程序版本"),
+                    maxLen = 40,
+                    requireMatch = VERSION_REGEX
+                ).ifBlank { extractVersionFromText(doc) }
         )
         val date = sanitizeValue(
-            extractValueByLabels(doc, listOf("Date", "日期")).ifBlank { extractDateFromText(doc) }
+            jsonDetail?.date
+                ?: extractValueByLabels(
+                    doc,
+                    listOf("Date", "日期", "Release Date", "发布日期"),
+                    maxLen = 40,
+                    requireMatch = DATE_VALUE_REGEX
+                ).ifBlank { extractDateFromText(doc) }
         )
         val size = sanitizeValue(
-            extractValueByLabels(doc, listOf("Size", "大小")).ifBlank { extractSizeFromText(doc) }
+            jsonDetail?.size
+                ?: extractValueByLabels(
+                    doc,
+                    listOf("Size", "大小", "File Size", "文件大小"),
+                    maxLen = 40,
+                    requireMatch = SIZE_REGEX
+                ).ifBlank { extractSizeFromText(doc) }
         )
         val sha256 = sanitizeValue(
-            extractValueByLabels(doc, listOf("SHA256", "SHA-256", "SHA 256")).ifBlank { extractSha256FromText(doc) }
+            jsonDetail?.sha256
+                ?: extractValueByLabels(
+                    doc,
+                    listOf("SHA256", "SHA-256", "SHA 256", "Checksum", "校验码"),
+                    maxLen = 80,
+                    requireMatch = SHA256_REGEX
+                ).ifBlank { extractSha256FromText(doc) }
         )
 
-        val downloadLink = doc.select("a[href]")
+        val downloadLink = jsonDetail?.downloadUrl ?: doc.select("a[href]")
             .firstOrNull { el ->
                 val text = el.text().lowercase(Locale.getDefault())
                 val href = el.absUrl("href").lowercase(Locale.getDefault())
@@ -159,7 +185,12 @@ class IntelArcRepository {
             .distinct()
     }
 
-    private fun extractValueByLabels(doc: Document, labels: List<String>): String {
+    private fun extractValueByLabels(
+        doc: Document,
+        labels: List<String>,
+        maxLen: Int? = null,
+        requireMatch: Regex? = null
+    ): String {
         val labelSet = labels.map { it.lowercase(Locale.getDefault()) }.toSet()
 
         // Try definition list: dt -> dd
@@ -169,7 +200,7 @@ class IntelArcRepository {
                 val dd = dt.nextElementSibling()
                 if (dd != null && dd.tagName().equals("dd", ignoreCase = true)) {
                     val v = dd.text().trim()
-                    if (v.isNotBlank()) return v
+                    if (isAcceptableValue(v, maxLen, requireMatch)) return v
                 }
             }
         }
@@ -182,7 +213,7 @@ class IntelArcRepository {
                 val text = th.text().trim().lowercase(Locale.getDefault())
                 if (text in labelSet) {
                     val v = td.text().trim()
-                    if (v.isNotBlank()) return v
+                    if (isAcceptableValue(v, maxLen, requireMatch)) return v
                 }
             }
         }
@@ -194,8 +225,21 @@ class IntelArcRepository {
                 val text = strong.text().trim().lowercase(Locale.getDefault())
                 if (text in labelSet) {
                     val v = block.ownText().trim()
-                    if (v.isNotBlank()) return v
+                    if (isAcceptableValue(v, maxLen, requireMatch)) return v
                 }
+            }
+        }
+
+
+        // Try label + span pattern (Intel banner blocks)
+        doc.select("label").forEach { label ->
+            val text = label.text().trim().lowercase(Locale.getDefault())
+            if (text in labelSet) {
+                val parent = label.parent()
+                val valueEl = parent?.selectFirst(".dc-page-banner-actions-action__value, span")
+                    ?: label.nextElementSibling()
+                val v = valueEl?.text()?.trim().orEmpty()
+                if (isAcceptableValue(v, maxLen, requireMatch)) return v
             }
         }
 
@@ -243,6 +287,61 @@ class IntelArcRepository {
         return clean.take(maxLen)
     }
 
+    private fun isAcceptableValue(value: String, maxLen: Int?, requireMatch: Regex?): Boolean {
+        val v = value.trim()
+        if (v.isBlank()) return false
+        if (maxLen != null && v.length > maxLen) return false
+        if (requireMatch != null && !requireMatch.containsMatchIn(v)) return false
+        return true
+    }
+
+    private fun extractJsonDetail(doc: Document): JsonDetail? {
+        for (script in doc.select("script")) {
+            val data = script.data().ifBlank { script.html() }
+            if (data.length < 50) continue
+            if (!data.contains("version", ignoreCase = true) &&
+                !data.contains("sha256", ignoreCase = true) &&
+                !data.contains("checksum", ignoreCase = true)
+            ) continue
+
+            val versionRaw = JSON_VERSION_REGEX.find(data)?.groupValues?.getOrNull(1)
+            val version = versionRaw?.let { sanitizeVersion(it) }?.takeIf { it.isNotBlank() }
+
+            val dateRaw = JSON_DATE_REGEX.find(data)?.groupValues?.getOrNull(1)
+            val date = dateRaw?.let { sanitizeValue(it, 40) }?.takeIf { it.isNotBlank() }
+
+            val sizeRaw = JSON_SIZE_REGEX.find(data)?.groupValues?.getOrNull(1)
+            val size = sizeRaw?.let { normalizeSize(it) }?.takeIf { it.isNotBlank() }
+
+
+
+            val sha = JSON_SHA256_REGEX.find(data)?.groupValues?.getOrNull(1)
+            val sha256 = sha?.let { it.trim() }?.takeIf { it.isNotBlank() }
+
+            val download = JSON_URL_REGEX.find(data)?.groupValues?.getOrNull(1)
+                ?.takeIf { it.contains("download", ignoreCase = true) }
+                ?.let { it.trim() }
+
+            if (version != null || date != null || size != null || sha256 != null || download != null) {
+                return JsonDetail(version, date, size, sha256, download)
+            }
+        }
+        return null
+    }
+
+    private fun normalizeSize(raw: String): String {
+        val v = raw.trim()
+        if (v.isBlank()) return v
+        if (SIZE_REGEX.containsMatchIn(v)) return v
+        val digits = v.filter { it.isDigit() }
+        val bytes = digits.toLongOrNull()
+        if (bytes != null && bytes > 0) {
+            val mb = bytes.toDouble() / (1024.0 * 1024.0)
+            return String.format(Locale.US, "%.1f MB", mb)
+        }
+        return v
+    }
+
     private fun extractSectionHtml(doc: Document, labels: List<String>): String {
         val heading = doc.select("h1,h2,h3,h4,h5,p,strong").firstOrNull { el ->
             labels.any { label -> el.text().contains(label, ignoreCase = true) }
@@ -282,11 +381,28 @@ class IntelArcRepository {
         private val VALID_LABELS = listOf("This download is valid for the product(s) listed below", "此下载对下面列出的产品有效")
 
         private val VERSION_REGEX = Regex("\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b")
-        private val DATE_REGEX = Regex("(?:Date|日期)\\s*[:：]?\\s*([A-Za-z]{3,9}\\s+\\d{1,2},\\s+\\d{4}|\\d{4}[-/]\\d{1,2}[-/]\\d{1,2})")
+        private val DATE_VALUE_REGEX = Regex(
+            "\\b([A-Za-z]{3,9}\\s+\\d{1,2},\\s+\\d{4}|\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}/\\d{1,2}/\\d{4})\\b"
+        )
+        private val DATE_REGEX = Regex("(?:Date|日期)\\s*[:：]?\\s*([A-Za-z]{3,9}\\s+\\d{1,2},\\s+\\d{4}|\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}/\\d{1,2}/\\d{4})")
         private val SIZE_REGEX = Regex("\\b\\d+(?:\\.\\d+)?\\s*(?:MB|GB)\\b", RegexOption.IGNORE_CASE)
         private val SHA256_REGEX = Regex("\\b[A-Fa-f0-9]{64}\\b")
+
+        private val JSON_VERSION_REGEX = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+        private val JSON_DATE_REGEX = Regex("\"(?:releaseDate|date)\"\\s*:\\s*\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+        private val JSON_SIZE_REGEX = Regex("\"(?:fileSize|size)\"\\s*:\\s*\"?([^\"]+?)\"?(?:,|\\})", RegexOption.IGNORE_CASE)
+        private val JSON_SHA256_REGEX = Regex("\"sha256\"\\s*:\\s*\"([A-Fa-f0-9]{64})\"", RegexOption.IGNORE_CASE)
+        private val JSON_URL_REGEX = Regex("\"(https?://[^\"]+)\"", RegexOption.IGNORE_CASE)
     }
 }
+
+private data class JsonDetail(
+    val version: String?,
+    val date: String?,
+    val size: String?,
+    val sha256: String?,
+    val downloadUrl: String?
+)
 
 private class InMemoryCookieJar : CookieJar {
     private val store = ConcurrentHashMap<String, MutableList<Cookie>>()
@@ -303,3 +419,9 @@ private class InMemoryCookieJar : CookieJar {
         return store[url.host] ?: emptyList()
     }
 }
+
+
+
+
+
+

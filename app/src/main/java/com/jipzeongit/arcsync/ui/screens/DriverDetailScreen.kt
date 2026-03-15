@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jipzeongit.arcsync.data.DriverDetailState
 import com.jipzeongit.arcsync.data.DriversViewModel
 import com.jipzeongit.arcsync.util.HtmlText
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,10 +43,20 @@ fun DriverDetailScreen(
     }
 
     val uiState = viewModel.detailState.collectAsStateWithLifecycle().value
+    val isZh = Locale.getDefault().language.startsWith("zh")
+
+    val titleFallback = if (isZh) "驱动详情" else "Driver Detail"
+    val sectionIntro = if (isZh) "介绍" else "Introduction"
+    val sectionDownloads = if (isZh) "可供下载" else "Available Downloads"
+    val sectionDetail = if (isZh) "详细说明" else "Detailed Description"
+    val sectionValid = if (isZh) "此下载对下面列出的产品有效" else "Valid Products"
+    val dateLabel = if (isZh) "日期" else "Date"
+    val sizeLabel = if (isZh) "大小" else "Size"
+    val shaLabel = "SHA256"
 
     val title = when (uiState) {
         is DriverDetailState.Data -> uiState.detail.summary.version
-        else -> "Driver Detail"
+        else -> titleFallback
     }
 
     Scaffold(
@@ -54,7 +65,7 @@ fun DriverDetailScreen(
                 title = { Text(title) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Filled.ArrowBack, contentDescription = if (isZh) "返回" else "Back")
                     }
                 }
             )
@@ -68,7 +79,7 @@ fun DriverDetailScreen(
             }
             is DriverDetailState.Error -> {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    Text("Load failed: ${uiState.message}")
+                    Text(if (isZh) "加载失败：${uiState.message}" else "Load failed: ${uiState.message}")
                 }
             }
             is DriverDetailState.Data -> {
@@ -80,28 +91,28 @@ fun DriverDetailScreen(
                     item {
                         Text(detail.summary.version, style = MaterialTheme.typography.headlineSmall)
                         Spacer(Modifier.height(6.dp))
-                        Text("Date: ${detail.summary.date}")
-                        Text("Size: ${detail.summary.size}")
-                        Text("SHA256: ${detail.summary.sha256}")
+                        Text("$dateLabel: ${detail.summary.date}")
+                        Text("$sizeLabel: ${detail.summary.size}")
+                        Text("$shaLabel: ${detail.summary.sha256}")
                     }
                     if (detail.introductionHtml.isNotBlank()) {
                         item {
-                            Section("Introduction") { HtmlText(detail.introductionHtml, onOpenUrl) }
+                            Section(sectionIntro) { HtmlText(detail.introductionHtml, onOpenUrl, detailUrl) }
                         }
                     }
                     if (detail.availableDownloadsHtml.isNotBlank()) {
                         item {
-                            Section("Available Downloads") { HtmlText(detail.availableDownloadsHtml, onOpenUrl) }
+                            Section(sectionDownloads) { HtmlText(detail.availableDownloadsHtml, onOpenUrl, detailUrl) }
                         }
                     }
                     if (detail.detailedDescriptionHtml.isNotBlank()) {
                         item {
-                            Section("Detailed Description") { HtmlText(detail.detailedDescriptionHtml, onOpenUrl) }
+                            Section(sectionDetail) { HtmlText(detail.detailedDescriptionHtml, onOpenUrl, detailUrl) }
                         }
                     }
                     if (detail.validProductsHtml.isNotBlank()) {
                         item {
-                            Section("Valid Products") { HtmlText(detail.validProductsHtml, onOpenUrl) }
+                            Section(sectionValid) { HtmlText(detail.validProductsHtml, onOpenUrl, detailUrl) }
                         }
                     }
                     item { Spacer(Modifier.height(80.dp)) }
@@ -119,3 +130,4 @@ private fun Section(title: String, content: @Composable () -> Unit) {
         content()
     }
 }
+
