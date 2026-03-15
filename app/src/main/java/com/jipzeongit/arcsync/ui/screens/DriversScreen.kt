@@ -31,6 +31,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -93,6 +96,7 @@ private fun DriversList(
     val dateLabel = if (isZh) "日期" else "Date"
     val sizeLabel = if (isZh) "大小" else "Size"
     val shaLabel = "SHA256"
+    val whqlLabel = if (isZh) "WHQL 认证" else "WHQL Certified"
     val downloadLabel = if (isZh) "下载" else "Download"
 
     LazyColumn(
@@ -121,10 +125,18 @@ private fun DriversList(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(driver.version, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        if (driver.whqlCertified) {
+                            Text(
+                                whqlLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
                         Spacer(Modifier.height(6.dp))
-                        Text("$dateLabel: ${driver.date}", style = MaterialTheme.typography.bodyMedium)
-                        Text("$sizeLabel: ${driver.size}", style = MaterialTheme.typography.bodyMedium)
-                        Text("$shaLabel: ${driver.sha256}", style = MaterialTheme.typography.bodyMedium)
+                        LabelValueText(dateLabel, driver.date)
+                        LabelValueText(sizeLabel, driver.size)
+                        LabelValueText(shaLabel, driver.sha256)
                     }
                     Icon(
                         imageVector = Icons.Filled.Download,
@@ -143,6 +155,17 @@ private fun DriversList(
 }
 
 @Composable
+private fun LabelValueText(label: String, value: String) {
+    val styled = buildAnnotatedString {
+        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+            append(label)
+        }
+        append(": ")
+        append(value)
+    }
+    Text(styled, style = MaterialTheme.typography.bodyMedium)
+}
+@Composable
 private fun ErrorState(message: String, onRetry: () -> Unit) {
     val isZh = Locale.getDefault().language.startsWith("zh")
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -155,4 +178,9 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
         }
     }
 }
+
+
+
+
+
 

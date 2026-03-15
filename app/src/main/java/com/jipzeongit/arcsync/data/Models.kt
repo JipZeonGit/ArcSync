@@ -5,6 +5,7 @@ data class DriverSummary(
     val date: String,
     val size: String,
     val sha256: String,
+    val whqlCertified: Boolean,
     val detailUrl: String,
     val downloadUrl: String
 )

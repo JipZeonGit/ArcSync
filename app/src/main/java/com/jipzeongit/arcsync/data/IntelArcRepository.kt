@@ -33,19 +33,19 @@ class IntelArcRepository {
         seedCookies(url)
         val doc = fetchDocument(url)
 
-        val detailUrls = extractDetailUrls(doc)
+        val detailEntries = extractDetailEntries(doc)
         val summaries = mutableListOf<DriverSummary>()
 
-        if (detailUrls.isEmpty()) {
+        if (detailEntries.isEmpty()) {
             val detail = parseDetail(doc, url)
             detailCache[url] = detail
             summaries += detail.summary
         } else {
-            for (detailUrl in detailUrls) {
-                seedCookies(detailUrl)
-                val detailDoc = fetchDocument(detailUrl)
-                val detail = parseDetail(detailDoc, detailUrl)
-                detailCache[detailUrl] = detail
+            for (entry in detailEntries) {
+                seedCookies(entry.url)
+                val detailDoc = fetchDocument(entry.url)
+                val detail = parseDetail(detailDoc, entry.url, entry.whqlCertified)
+                detailCache[entry.url] = detail
                 summaries += detail.summary
             }
         }
@@ -103,7 +103,7 @@ class IntelArcRepository {
         return if (url.contains("intel.cn")) CN_URL else EN_URL
     }
 
-    private fun parseDetail(doc: Document, detailUrl: String): DriverDetail {
+    private fun parseDetail(doc: Document, detailUrl: String, whqlOverride: Boolean? = null): DriverDetail {
         val jsonDetail = extractJsonDetail(doc)
         val metaVersion = extractMetaContent(doc, listOf("DownloadVersion"))
         val metaDate = extractMetaDate(doc)
@@ -146,6 +146,8 @@ class IntelArcRepository {
                     requireMatch = SHA256_REGEX
                 ).ifBlank { extractSha256FromText(doc) }
         )
+        val whqlCertified = whqlOverride ?: detectWhql(doc)
+
         val downloadLink = jsonDetail?.downloadUrl ?: doc.select("a[href]")
             .firstOrNull { el ->
                 val text = el.text().lowercase(Locale.getDefault())
@@ -161,6 +163,7 @@ class IntelArcRepository {
             date = if (date.isNotBlank()) date else "Unknown",
             size = if (size.isNotBlank()) size else "Unknown",
             sha256 = if (sha256.isNotBlank()) sha256 else "Unknown",
+            whqlCertified = whqlCertified,
             detailUrl = detailUrl,
             downloadUrl = downloadLink
         )
@@ -179,16 +182,18 @@ class IntelArcRepository {
         )
     }
 
-    private fun extractDetailUrls(doc: Document): List<String> {
-        val optionUrls = doc.select("select#version-driver-select option[value], select[name=version-driver-select] option[value], select option[value]")
-            .mapNotNull { it.attr("value")?.trim()?.takeIf { v -> v.isNotBlank() } }
-            .filter { value ->
-                value.contains("/download/") && value.contains("intel-arc-graphics-windows")
+    private fun extractDetailEntries(doc: Document): List<DetailEntry> {
+        val optionEntries = doc.select("select#version-driver-select option[value], select[name=version-driver-select] option[value], select option[value]")
+            .mapNotNull { option ->
+                val value = option.attr("value")?.trim().orEmpty()
+                if (value.isBlank()) return@mapNotNull null
+                if (!value.contains("/download/") || !value.contains("intel-arc-graphics-windows")) return@mapNotNull null
+                val whql = option.text().contains("WHQL", ignoreCase = true)
+                DetailEntry(toAbsoluteUrl(doc, value), whql)
             }
-            .map { toAbsoluteUrl(doc, it) }
-            .distinct()
+            .distinctBy { it.url }
 
-        if (optionUrls.isNotEmpty()) return optionUrls.take(MAX_VERSIONS)
+        if (optionEntries.isNotEmpty()) return optionEntries.take(MAX_VERSIONS)
 
         val urls = doc.select("a[href]")
             .mapNotNull { it.absUrl("href") }
@@ -197,13 +202,14 @@ class IntelArcRepository {
             }
             .distinct()
 
-        if (urls.isNotEmpty()) return urls.take(MAX_VERSIONS)
+        if (urls.isNotEmpty()) return urls.take(MAX_VERSIONS).map { DetailEntry(it, false) }
 
         return doc.select("a[href]")
             .mapNotNull { it.absUrl("href") }
             .filter { href -> href.contains("/download/") && href.contains("intel") }
             .distinct()
             .take(MAX_VERSIONS)
+            .map { DetailEntry(it, false) }
     }
 
     private fun extractValueByLabels(
@@ -310,6 +316,12 @@ class IntelArcRepository {
         return m?.value.orEmpty()
     }
 
+    private fun detectWhql(doc: Document): Boolean {
+        val text = doc.text()
+        if (text.contains("Non-WHQL", ignoreCase = true)) return false
+        if (text.contains("WHQL", ignoreCase = true)) return true
+        return false
+    }
     private fun sanitizeVersion(value: String): String {
         val v = value.trim()
         if (v.isBlank()) return v
@@ -476,6 +488,10 @@ class IntelArcRepository {
     }
 }
 
+private data class DetailEntry(
+    val url: String,
+    val whqlCertified: Boolean
+)
 private data class JsonDetail(
     val version: String?,
     val date: String?,
@@ -499,6 +515,16 @@ private class InMemoryCookieJar : CookieJar {
         return store[url.host] ?: emptyList()
     }
 }
+
+
+
+
+
+
+
+
+
+
 
 
 

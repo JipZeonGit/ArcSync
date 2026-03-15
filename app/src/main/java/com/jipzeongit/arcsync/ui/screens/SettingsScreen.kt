@@ -2,6 +2,7 @@
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -75,6 +76,13 @@ fun SettingsScreen(settingsRepository: SettingsRepository) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { showAboutDialog = true }
+            )
+            ListItem(
+                headlineContent = { Text("GitHub") },
+                supportingContent = { Text(GITHUB_URL) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { openUrl(context, GITHUB_URL) }
             )
             ListItem(
                 headlineContent = { Text("获取更新") },
@@ -161,6 +169,13 @@ private fun AboutDialog(version: String, onDismiss: () -> Unit) {
     )
 }
 
+private const val GITHUB_URL = "https://github.com/JipZeonGit/ArcSync"
+
+private fun openUrl(context: Context, url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+    context.startActivity(intent)
+}
+
 private fun exportLogs(context: Context) {
     val file = AppLogger.exportToFile() ?: return
     val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
@@ -171,3 +186,7 @@ private fun exportLogs(context: Context) {
     }
     context.startActivity(Intent.createChooser(intent, "导出日志"))
 }
+
+
+
+
