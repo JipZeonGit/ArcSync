@@ -98,15 +98,24 @@ class IntelArcRepository {
     }
 
     private fun parseDetail(doc: Document, detailUrl: String): DriverDetail {
-        val version = extractValueByLabels(doc, listOf("Version", "版本"))
-        val date = extractValueByLabels(doc, listOf("Date", "日期"))
-        val size = extractValueByLabels(doc, listOf("Size", "大小"))
-        val sha256 = extractValueByLabels(doc, listOf("SHA256", "SHA-256", "SHA 256"))
+        val version = sanitizeVersion(
+            extractValueByLabels(doc, listOf("Version", "版本")).ifBlank { extractVersionFromText(doc) }
+        )
+        val date = sanitizeValue(
+            extractValueByLabels(doc, listOf("Date", "日期")).ifBlank { extractDateFromText(doc) }
+        )
+        val size = sanitizeValue(
+            extractValueByLabels(doc, listOf("Size", "大小")).ifBlank { extractSizeFromText(doc) }
+        )
+        val sha256 = sanitizeValue(
+            extractValueByLabels(doc, listOf("SHA256", "SHA-256", "SHA 256")).ifBlank { extractSha256FromText(doc) }
+        )
 
         val downloadLink = doc.select("a[href]")
             .firstOrNull { el ->
                 val text = el.text().lowercase(Locale.getDefault())
-                text.contains("download") || text.contains("下载")
+                val href = el.absUrl("href").lowercase(Locale.getDefault())
+                text.contains("download") || text.contains("下载") || href.contains("download")
             }
             ?.absUrl("href")
             .orEmpty()
@@ -151,23 +160,87 @@ class IntelArcRepository {
     }
 
     private fun extractValueByLabels(doc: Document, labels: List<String>): String {
-        val label = doc.select("*" ).firstOrNull { el ->
-            labels.any { el.text().trim().equals(it, ignoreCase = true) }
-        }
-        if (label != null) {
-            val next = label.nextElementSibling()
-            if (next != null && next.text().isNotBlank()) return next.text().trim()
-            val parent = label.parent()
-            if (parent != null) {
-                val siblings = parent.children()
-                val index = siblings.indexOf(label)
-                if (index >= 0 && index + 1 < siblings.size) {
-                    val candidate = siblings[index + 1].text().trim()
-                    if (candidate.isNotBlank()) return candidate
+        val labelSet = labels.map { it.lowercase(Locale.getDefault()) }.toSet()
+
+        // Try definition list: dt -> dd
+        doc.select("dt").forEach { dt ->
+            val text = dt.text().trim().lowercase(Locale.getDefault())
+            if (text in labelSet) {
+                val dd = dt.nextElementSibling()
+                if (dd != null && dd.tagName().equals("dd", ignoreCase = true)) {
+                    val v = dd.text().trim()
+                    if (v.isNotBlank()) return v
                 }
             }
         }
+
+        // Try table rows: th -> td
+        doc.select("tr").forEach { tr ->
+            val th = tr.selectFirst("th")
+            val td = tr.selectFirst("td")
+            if (th != null && td != null) {
+                val text = th.text().trim().lowercase(Locale.getDefault())
+                if (text in labelSet) {
+                    val v = td.text().trim()
+                    if (v.isNotBlank()) return v
+                }
+            }
+        }
+
+        // Try strong/b label inside a block
+        doc.select("p,div,li").forEach { block ->
+            val strong = block.selectFirst("strong,b")
+            if (strong != null) {
+                val text = strong.text().trim().lowercase(Locale.getDefault())
+                if (text in labelSet) {
+                    val v = block.ownText().trim()
+                    if (v.isNotBlank()) return v
+                }
+            }
+        }
+
         return ""
+    }
+
+    private fun extractVersionFromText(doc: Document): String {
+        val h1 = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+        val m1 = VERSION_REGEX.find(h1)
+        if (m1 != null) return m1.value
+
+        val text = doc.text()
+        val m2 = VERSION_REGEX.find(text)
+        return m2?.value.orEmpty()
+    }
+
+    private fun extractDateFromText(doc: Document): String {
+        val text = doc.text()
+        val m = DATE_REGEX.find(text)
+        return m?.groupValues?.getOrNull(1).orEmpty()
+    }
+
+    private fun extractSizeFromText(doc: Document): String {
+        val text = doc.text()
+        val m = SIZE_REGEX.find(text)
+        return m?.value.orEmpty()
+    }
+
+    private fun extractSha256FromText(doc: Document): String {
+        val text = doc.text()
+        val m = SHA256_REGEX.find(text)
+        return m?.value.orEmpty()
+    }
+
+    private fun sanitizeVersion(value: String): String {
+        val v = value.trim()
+        if (v.isBlank()) return v
+        val m = VERSION_REGEX.find(v)
+        return m?.value ?: sanitizeValue(v)
+    }
+
+    private fun sanitizeValue(value: String, maxLen: Int = 80): String {
+        val clean = value.replace("\u00A0", " ").trim()
+        if (clean.length <= maxLen) return clean
+        return clean.take(maxLen)
     }
 
     private fun extractSectionHtml(doc: Document, labels: List<String>): String {
@@ -207,6 +280,11 @@ class IntelArcRepository {
         private val DOWNLOADS_LABELS = listOf("Available Downloads", "可供下载")
         private val DETAIL_LABELS = listOf("Detailed Description", "详细说明")
         private val VALID_LABELS = listOf("This download is valid for the product(s) listed below", "此下载对下面列出的产品有效")
+
+        private val VERSION_REGEX = Regex("\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b")
+        private val DATE_REGEX = Regex("(?:Date|日期)\\s*[:：]?\\s*([A-Za-z]{3,9}\\s+\\d{1,2},\\s+\\d{4}|\\d{4}[-/]\\d{1,2}[-/]\\d{1,2})")
+        private val SIZE_REGEX = Regex("\\b\\d+(?:\\.\\d+)?\\s*(?:MB|GB)\\b", RegexOption.IGNORE_CASE)
+        private val SHA256_REGEX = Regex("\\b[A-Fa-f0-9]{64}\\b")
     }
 }
 
