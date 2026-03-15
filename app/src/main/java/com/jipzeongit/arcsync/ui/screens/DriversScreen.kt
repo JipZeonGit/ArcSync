@@ -1,4 +1,4 @@
-﻿package com.jipzeongit.arcsync.ui.screens
+package com.jipzeongit.arcsync.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,15 +15,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -31,8 +35,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import com.jipzeongit.arcsync.ui.components.WaveLoadingIndicator
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -64,7 +71,7 @@ fun DriversScreen(
     when (val ui = uiState) {
         is DriversUiState.Loading -> {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                WaveLoadingIndicator()
             }
         }
         is DriversUiState.Error -> {
@@ -93,11 +100,10 @@ private fun DriversList(
     onOpenDownload: (String) -> Unit
 ) {
     val isZh = Locale.getDefault().language.startsWith("zh")
-    val dateLabel = if (isZh) "日期" else "Date"
-    val sizeLabel = if (isZh) "大小" else "Size"
     val shaLabel = "SHA256"
     val whqlLabel = if (isZh) "WHQL 认证" else "WHQL Certified"
     val downloadLabel = if (isZh) "下载" else "Download"
+    val clipboardManager = LocalClipboardManager.current
 
     LazyColumn(
         state = listState,
@@ -107,7 +113,7 @@ private fun DriversList(
                 if (showRefreshing) {
             item {
                 Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    WaveLoadingIndicator(modifier = Modifier.height(18.dp))
                     Spacer(Modifier.height(6.dp))
                 }
             }
@@ -121,32 +127,70 @@ private fun DriversList(
             ) {
                 Row(
                     modifier = Modifier.padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(driver.version, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        if (driver.whqlCertified) {
+                        Text(
+                            text = driver.version,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                whqlLabel,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
+                                text = "${driver.date} • ${driver.size}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Spacer(Modifier.height(4.dp))
                         }
-                        Spacer(Modifier.height(6.dp))
-                        LabelValueText(dateLabel, driver.date)
-                        LabelValueText(sizeLabel, driver.size)
-                        LabelValueText(shaLabel, driver.sha256)
-                    }
-                    Icon(
-                        imageVector = Icons.Filled.Download,
-                        contentDescription = downloadLabel,
-                        modifier = Modifier
-                            .padding(start = 12.dp)
-                            .clickable(enabled = driver.downloadUrl.isNotBlank()) {
-                                onOpenDownload(driver.downloadUrl)
+                        if (driver.whqlCertified) {
+                            Spacer(Modifier.height(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ) {
+                                Text(
+                                    text = whqlLabel,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
-                    )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "$shaLabel: *******",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            IconButton(
+                                onClick = { clipboardManager.setText(AnnotatedString(driver.sha256)) },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.ContentCopy,
+                                    contentDescription = "Copy Hash",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                    FilledTonalIconButton(
+                        onClick = { onOpenDownload(driver.downloadUrl) },
+                        enabled = driver.downloadUrl.isNotBlank(),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.padding(start = 12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Download,
+                            contentDescription = downloadLabel
+                        )
+                    }
                 }
             }
         }

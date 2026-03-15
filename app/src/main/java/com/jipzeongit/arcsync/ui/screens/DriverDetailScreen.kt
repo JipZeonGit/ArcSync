@@ -1,4 +1,4 @@
-﻿package com.jipzeongit.arcsync.ui.screens
+package com.jipzeongit.arcsync.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,10 +10,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import com.jipzeongit.arcsync.ui.components.WaveLoadingIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
@@ -65,7 +65,7 @@ fun DriverDetailScreen(
                 title = { Text(title) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = if (isZh) "返回" else "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = if (isZh) "返回" else "Back")
                     }
                 }
             )
@@ -74,7 +74,7 @@ fun DriverDetailScreen(
         when (uiState) {
             is DriverDetailState.Loading -> {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+                    WaveLoadingIndicator()
                 }
             }
             is DriverDetailState.Error -> {
