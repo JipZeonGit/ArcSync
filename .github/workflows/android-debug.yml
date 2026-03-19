@@ -3,8 +3,14 @@ name: Android Debug Build
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "README.md"
+      - "THIRD_PARTY_NOTICES.md"
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - "README.md"
+      - "THIRD_PARTY_NOTICES.md"
 
 jobs:
   build:

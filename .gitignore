@@ -33,3 +33,9 @@ local.properties
 # Local Gradle distribution
 /gradle-8.7-bin/
 /gradle-8.7-bin.zip
+
+# Github Store Reference
+github-store-reference/
+
+# Scraper Test Data
+scraper-test-data/

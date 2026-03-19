@@ -1,9 +1,12 @@
 ﻿package com.jipzeongit.arcsync.data
 
+import android.content.Context
+import java.io.File
 import java.io.IOException
 import java.net.URI
-import java.util.Locale
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
@@ -11,58 +14,111 @@ import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-class IntelArcRepository {
+class IntelArcRepository(context: Context) {
+    private val appContext = context.applicationContext
+    private val cacheDirectory = File(appContext.cacheDir, "intel-arc-cache").apply { mkdirs() }
     private val detailCache = mutableMapOf<String, DriverDetail>()
-    private val listCache = mutableListOf<DriverSummary>()
+    private val listCache = mutableMapOf<AppLang, List<DriverSummary>>()
 
     private val cookieJar = InMemoryCookieJar()
     private val client = OkHttpClient.Builder()
         .cookieJar(cookieJar)
         .followRedirects(true)
         .followSslRedirects(true)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    suspend fun fetchAllDrivers(): List<DriverSummary> = withContext(Dispatchers.IO) {
-        if (listCache.isNotEmpty()) return@withContext listCache
+    suspend fun fetchAllDrivers(lang: AppLang = AppLang.ZH_CN): List<DriverSummary> = withContext(Dispatchers.IO) {
+        listCache[lang]?.let { return@withContext it }
 
-        val url = if (isChinese()) CN_URL else EN_URL
-        seedCookies(url)
-        val doc = fetchDocument(url)
+        val cachedList = readListCache(lang)
+        val landingUrl = lang.baseUrl
 
-        val detailEntries = extractDetailEntries(doc)
-        val summaries = mutableListOf<DriverSummary>()
+        try {
+            val landingDoc = fetchDocument(landingUrl)
+            val entries = extractDetailEntries(landingDoc).take(MAX_VERSIONS)
+            val previousByUrl = cachedList.associateBy { it.detailUrl }
 
-        if (detailEntries.isEmpty()) {
-            val detail = parseDetail(doc, url)
-            detailCache[url] = detail
-            summaries += detail.summary
-        } else {
-            for (entry in detailEntries) {
-                seedCookies(entry.url)
-                val detailDoc = fetchDocument(entry.url)
-                val detail = parseDetail(detailDoc, entry.url, entry.whqlCertified)
-                detailCache[entry.url] = detail
-                summaries += detail.summary
+            val summaries = if (entries.isEmpty()) {
+                val detail = parseDetail(landingDoc, landingUrl)
+                detailCache[detail.summary.detailUrl] = detail
+                writeDetailCache(detail.summary.detailUrl, detail)
+                listOf(detail.summary)
+            } else {
+                entries.mapIndexed { index, entry ->
+                    if (index > 0) {
+                        Thread.sleep(REQUEST_SPACING_MS)
+                    }
+
+                    runCatching {
+                        val detailDoc = if (urlsEquivalent(entry.url, landingUrl)) {
+                            landingDoc
+                        } else {
+                            fetchDocument(entry.url)
+                        }
+                        val detail = parseDetail(
+                            doc = detailDoc,
+                            detailUrl = entry.url,
+                            whqlOverride = entry.whqlCertified,
+                            versionOverride = entry.version
+                        )
+                        detailCache[detail.summary.detailUrl] = detail
+                        writeDetailCache(detail.summary.detailUrl, detail)
+                        detail.summary
+                    }.getOrElse {
+                        previousByUrl[entry.url] ?: DriverSummary(
+                            version = entry.version,
+                            date = "Unknown",
+                            size = "Unknown",
+                            sha256 = "Unknown",
+                            whqlCertified = entry.whqlCertified,
+                            detailUrl = entry.url,
+                            downloadUrl = "",
+                            isCached = false
+                        )
+                    }
+                }.distinctBy { it.version }
+            }
+
+            listCache[lang] = summaries
+            writeListCache(lang, summaries)
+            summaries
+        } catch (t: Throwable) {
+            if (cachedList.isNotEmpty()) {
+                listCache[lang] = cachedList
+                cachedList
+            } else {
+                throw t
             }
         }
-
-        val ordered = summaries.distinctBy { it.version }
-        listCache += ordered
-        return@withContext listCache
     }
 
     suspend fun fetchDriverDetail(detailUrl: String): DriverDetail = withContext(Dispatchers.IO) {
-        detailCache[detailUrl]?.let { return@withContext it }
+        val normalizedUrl = normalizeIntelUrl(detailUrl)
+        detailCache[normalizedUrl]?.let { return@withContext it }
 
-        seedCookies(detailUrl)
-        val doc = fetchDocument(detailUrl)
-        val detail = parseDetail(doc, detailUrl)
-        detailCache[detailUrl] = detail
-        return@withContext detail
+        val cachedDetail = readDetailCache(normalizedUrl)
+        if (cachedDetail != null) {
+            detailCache[normalizedUrl] = cachedDetail
+        }
+
+        try {
+            val doc = fetchDocument(normalizedUrl)
+            val detail = parseDetail(doc, normalizedUrl)
+            detailCache[detail.summary.detailUrl] = detail
+            writeDetailCache(detail.summary.detailUrl, detail)
+            detail
+        } catch (t: Throwable) {
+            cachedDetail ?: throw t
+        }
     }
 
     fun clearCache() {
@@ -71,433 +127,361 @@ class IntelArcRepository {
     }
 
     private fun fetchDocument(url: String): Document {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", USER_AGENT)
-            .header("Accept", ACCEPT)
-            .header("Accept-Language", ACCEPT_LANGUAGE)
-            .header("Referer", refererFor(url))
-            .build()
+        val candidates = buildList {
+            add(normalizeIntelUrl(url))
+            add(normalizeIntelUrl(toIntelComUrl(url)))
+        }.filter { it.isNotBlank() }.distinct()
 
-        val response = client.newCall(request).execute()
-        if (!response.isSuccessful) {
-            response.close()
-            throw IOException("HTTP error ${response.code} for $url")
-        }
-        val body = response.body?.string().orEmpty()
-        response.close()
-        return Jsoup.parse(body, url)
-    }
-
-    private fun seedCookies(url: String) {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", USER_AGENT)
-            .header("Accept", ACCEPT)
-            .header("Accept-Language", ACCEPT_LANGUAGE)
-            .build()
-        client.newCall(request).execute().close()
-    }
-
-    private fun refererFor(url: String): String {
-        return if (url.contains("intel.cn")) CN_URL else EN_URL
-    }
-
-    private fun parseDetail(doc: Document, detailUrl: String, whqlOverride: Boolean? = null): DriverDetail {
-        val jsonDetail = extractJsonDetail(doc)
-        val metaVersion = extractMetaContent(doc, listOf("DownloadVersion"))
-        val metaDate = extractMetaDate(doc)
-        val metaDownloadUrl = extractMetaContent(doc, listOf("RecommendedDownloadUrl"))
-        val version = sanitizeVersion(
-            metaVersion
-                .ifBlank { jsonDetail?.version.orEmpty() }
-                ?: extractValueByLabels(
-                    doc,
-                    listOf("Version", "版本", "Driver Version", "驱动程序版本"),
-                    maxLen = 40,
-                    requireMatch = VERSION_REGEX
-                ).ifBlank { extractVersionFromText(doc) }
-        )
-        val date = sanitizeValue(
-            metaDate
-                .ifBlank { jsonDetail?.date.orEmpty() }
-                ?: extractValueByLabels(
-                    doc,
-                    listOf("Date", "日期", "Release Date", "发布日期"),
-                    maxLen = 40,
-                    requireMatch = DATE_VALUE_REGEX
-                ).ifBlank { extractDateFromText(doc) }
-        )
-        val size = sanitizeValue(
-            jsonDetail?.size
-                ?: extractValueByLabels(
-                    doc,
-                    listOf("Size", "大小", "File Size", "文件大小"),
-                    maxLen = 40,
-                    requireMatch = SIZE_REGEX
-                ).ifBlank { extractSizeFromText(doc) }
-        )
-        val sha256 = sanitizeValue(
-            jsonDetail?.sha256
-                ?: extractValueByLabels(
-                    doc,
-                    listOf("SHA256", "SHA-256", "SHA 256", "Checksum", "校验码"),
-                    maxLen = 80,
-                    requireMatch = SHA256_REGEX
-                ).ifBlank { extractSha256FromText(doc) }
-        )
-        val whqlCertified = whqlOverride ?: detectWhql(doc)
-
-        val downloadLink = jsonDetail?.downloadUrl ?: doc.select("a[href]")
-            .firstOrNull { el ->
-                val text = el.text().lowercase(Locale.getDefault())
-                val href = el.absUrl("href").lowercase(Locale.getDefault())
-                text.contains("download") || text.contains("下载") || href.contains("download")
+        var lastError: IOException? = null
+        for (candidate in candidates) {
+            repeat(MAX_FETCH_ATTEMPTS) { attempt ->
+                try {
+                    val response = client.newCall(buildRequest(candidate)).execute()
+                    if (!response.isSuccessful) {
+                        val code = response.code
+                        val message = "HTTP error $code for $candidate"
+                        response.close()
+                        if (code in RETRYABLE_HTTP_CODES && attempt < MAX_FETCH_ATTEMPTS - 1) {
+                            Thread.sleep(RETRY_DELAY_MS)
+                            return@repeat
+                        }
+                        throw IOException(message)
+                    }
+                    val body = response.body?.string().orEmpty()
+                    response.close()
+                    return Jsoup.parse(body, candidate)
+                } catch (io: IOException) {
+                    lastError = io
+                    if (attempt < MAX_FETCH_ATTEMPTS - 1) {
+                        Thread.sleep(RETRY_DELAY_MS)
+                    }
+                }
             }
-            ?.absUrl("href")
-            .orEmpty()
-            .ifBlank { metaDownloadUrl }
-            .ifBlank { extractDownloadUrl(doc) }
-        val summary = DriverSummary(
-            version = if (version.isNotBlank()) version else "Unknown",
-            date = if (date.isNotBlank()) date else "Unknown",
-            size = if (size.isNotBlank()) size else "Unknown",
-            sha256 = if (sha256.isNotBlank()) sha256 else "Unknown",
-            whqlCertified = whqlCertified,
-            detailUrl = detailUrl,
-            downloadUrl = downloadLink
-        )
+        }
 
-        val introductionHtml = extractSectionHtml(doc, INTRO_LABELS)
-        val downloadsHtml = extractSectionHtml(doc, DOWNLOADS_LABELS)
-        val detailHtml = extractSectionHtml(doc, DETAIL_LABELS)
-        val validProductsHtml = extractSectionHtml(doc, VALID_LABELS)
+        throw lastError ?: IOException("Failed to load $url")
+    }
 
-        return DriverDetail(
-            summary = summary,
-            introductionHtml = introductionHtml,
-            availableDownloadsHtml = downloadsHtml,
-            detailedDescriptionHtml = detailHtml,
-            validProductsHtml = validProductsHtml
-        )
+    private fun buildRequest(url: String): Request {
+        val locale = localeForUrl(url)
+        return Request.Builder()
+            .url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", ACCEPT)
+            .header("Accept-Language", locale.acceptLanguage)
+            .header("Referer", locale.referer)
+            .header("Cache-Control", "no-cache")
+            .header("Pragma", "no-cache")
+            .header("Upgrade-Insecure-Requests", "1")
+            .header("Sec-Fetch-Dest", "document")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Sec-Fetch-User", "?1")
+            .build()
     }
 
     private fun extractDetailEntries(doc: Document): List<DetailEntry> {
-        val optionEntries = doc.select("select#version-driver-select option[value], select[name=version-driver-select] option[value], select option[value]")
+        return doc.select("select#version-driver-select option[value]")
             .mapNotNull { option ->
-                val value = option.attr("value")?.trim().orEmpty()
-                if (value.isBlank()) return@mapNotNull null
-                if (!value.contains("/download/") || !value.contains("intel-arc-graphics-windows")) return@mapNotNull null
-                val whql = option.text().contains("WHQL", ignoreCase = true)
-                DetailEntry(toAbsoluteUrl(doc, value), whql)
+                val relativeUrl = option.attr("value").trim()
+                if (relativeUrl.isBlank()) return@mapNotNull null
+
+                val version = VERSION_REGEX.find(option.text())?.value ?: return@mapNotNull null
+                DetailEntry(
+                    url = normalizeIntelUrl(toAbsoluteUrl(doc, relativeUrl)),
+                    version = version,
+                    whqlCertified = isWhqlText(option.text())
+                )
             }
             .distinctBy { it.url }
-
-        if (optionEntries.isNotEmpty()) return optionEntries.take(MAX_VERSIONS)
-
-        val urls = doc.select("a[href]")
-            .mapNotNull { it.absUrl("href") }
-            .filter { href ->
-                href.contains("intel-arc-graphics-windows") && href.contains("/download/")
-            }
-            .distinct()
-
-        if (urls.isNotEmpty()) return urls.take(MAX_VERSIONS).map { DetailEntry(it, false) }
-
-        return doc.select("a[href]")
-            .mapNotNull { it.absUrl("href") }
-            .filter { href -> href.contains("/download/") && href.contains("intel") }
-            .distinct()
-            .take(MAX_VERSIONS)
-            .map { DetailEntry(it, false) }
     }
 
-    private fun extractValueByLabels(
+    private fun parseDetail(
         doc: Document,
-        labels: List<String>,
-        maxLen: Int? = null,
-        requireMatch: Regex? = null
-    ): String {
-        val labelSet = labels.map { it.lowercase(Locale.getDefault()) }.toSet()
+        detailUrl: String,
+        whqlOverride: Boolean? = null,
+        versionOverride: String? = null
+    ): DriverDetail {
+        val normalizedDetailUrl = normalizeIntelUrl(detailUrl)
+        val optionText = extractCurrentOptionText(doc, normalizedDetailUrl)
 
-        // Try definition list: dt -> dd
-        doc.select("dt").forEach { dt ->
-            val text = dt.text().trim().lowercase(Locale.getDefault())
-            if (text in labelSet) {
-                val dd = dt.nextElementSibling()
-                if (dd != null && dd.tagName().equals("dd", ignoreCase = true)) {
-                    val v = dd.text().trim()
-                    if (isAcceptableValue(v, maxLen, requireMatch)) return v
-                }
+        val version = doc.selectFirst("meta[name=DownloadVersion]")
+            ?.attr("content")
+            ?.trim()
+            .orEmpty()
+            .let { VERSION_REGEX.find(it)?.value.orEmpty() }
+            .ifBlank { versionOverride.orEmpty() }
+            .ifBlank { VERSION_REGEX.find(optionText)?.value.orEmpty() }
+            .ifBlank { VERSION_REGEX.find(doc.text())?.value.orEmpty() }
+
+        val date = doc.selectFirst(".dc-page-banner-actions-action-updated .dc-page-banner-actions-action__value")
+            ?.text()
+            ?.trim()
+            .orEmpty()
+            .ifBlank {
+                doc.selectFirst("meta[name=LastUpdate]")
+                    ?.attr("content")
+                    ?.substringBefore(' ')
+                    ?.trim()
+                    .orEmpty()
+            }
+
+        val detailTexts = doc.select(".dc-page-available-downloads-hero-details-list__detail").eachText()
+        val size = detailTexts.firstNotNullOfOrNull { SIZE_REGEX.find(it)?.value }.orEmpty()
+        val sha256 = detailTexts.firstNotNullOfOrNull { SHA256_REGEX.find(it)?.value }.orEmpty()
+
+        val downloadUrl = doc.selectFirst(
+            ".dc-page-available-downloads-hero-button__cta[data-href], .available-download-button__cta[data-href], button[data-href]"
+        )
+            ?.attr("data-href")
+            ?.trim()
+            .orEmpty()
+            .ifBlank {
+                doc.select("a[href]")
+                    .mapNotNull { anchor -> anchor.absUrl("href").takeIf { it.isNotBlank() } }
+                    .firstOrNull { href ->
+                        href.contains("download", ignoreCase = true) && href.endsWith(".exe", ignoreCase = true)
+                    }
+                    .orEmpty()
+            }
+            .let { raw -> if (raw.isBlank()) raw else normalizeIntelUrl(toAbsoluteUrl(doc, raw)) }
+
+        val whqlCertified = whqlOverride ?: when {
+            optionText.contains("Non-WHQL", ignoreCase = true) -> false
+            isWhqlText(optionText) -> true
+            doc.text().contains("Non-WHQL", ignoreCase = true) -> false
+            else -> isWhqlText(doc.text())
+        }
+
+        val summary = DriverSummary(
+            version = version.ifBlank { "Unknown" },
+            date = date.ifBlank { "Unknown" },
+            size = size.ifBlank { "Unknown" },
+            sha256 = sha256.ifBlank { "Unknown" },
+            whqlCertified = whqlCertified,
+            detailUrl = normalizedDetailUrl,
+            downloadUrl = downloadUrl,
+            isCached = false
+        )
+
+        return DriverDetail(
+            summary = summary,
+            introductionHtml = extractSectionBody(doc.selectFirst(".dc-page-short-description")),
+            availableDownloadsHtml = extractSectionBody(doc.selectFirst(".dc-page-available-downloads")),
+            detailedDescriptionHtml = extractSectionBody(doc.selectFirst(".dc-page-detailed-description")),
+            validProductsHtml = doc.selectFirst(".dc-page-detailed-other-valid-products-panel")?.outerHtml().orEmpty()
+        )
+    }
+
+    private fun extractCurrentOptionText(doc: Document, detailUrl: String): String {
+        val options = doc.select("select#version-driver-select option[value]")
+        val matched = options.firstOrNull { option ->
+            urlsEquivalent(normalizeIntelUrl(toAbsoluteUrl(doc, option.attr("value"))), detailUrl)
+        }
+        return matched?.text().orEmpty().ifBlank {
+            doc.selectFirst("select#version-driver-select option[selected]")?.text().orEmpty()
+        }
+    }
+
+    private fun extractSectionBody(container: Element?): String {
+        if (container == null) return ""
+
+        val builder = StringBuilder()
+        container.children().forEach { child ->
+            if (!child.tagName().matches(HEADING_TAG_REGEX)) {
+                builder.append(child.outerHtml())
             }
         }
+        return builder.toString()
+    }
 
-        // Try table rows: th -> td
-        doc.select("tr").forEach { tr ->
-            val th = tr.selectFirst("th")
-            val td = tr.selectFirst("td")
-            if (th != null && td != null) {
-                val text = th.text().trim().lowercase(Locale.getDefault())
-                if (text in labelSet) {
-                    val v = td.text().trim()
-                    if (isAcceptableValue(v, maxLen, requireMatch)) return v
-                }
-            }
+    private fun readListCache(lang: AppLang): List<DriverSummary> {
+        val file = listCacheFile(lang)
+        if (!file.exists()) return emptyList()
+
+        return runCatching {
+            val root = JSONObject(file.readText())
+            if (isCacheExpired(root.optLong("timestamp", 0L))) return@runCatching emptyList()
+            root.getJSONArray("drivers").toDriverSummaryList(fromCache = true)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun writeListCache(lang: AppLang, drivers: List<DriverSummary>) {
+        if (drivers.isEmpty()) return
+
+        runCatching {
+            val root = JSONObject()
+                .put("lang", lang.code)
+                .put("timestamp", System.currentTimeMillis())
+                .put("drivers", JSONArray().apply {
+                    drivers.forEach { put(it.copy(isCached = false).toJson()) }
+                })
+            listCacheFile(lang).writeText(root.toString())
         }
+    }
 
-        // Try strong/b label inside a block
-        doc.select("p,div,li").forEach { block ->
-            val strong = block.selectFirst("strong,b")
-            if (strong != null) {
-                val text = strong.text().trim().lowercase(Locale.getDefault())
-                if (text in labelSet) {
-                    val v = block.ownText().trim()
-                    if (isAcceptableValue(v, maxLen, requireMatch)) return v
-                }
-            }
+    private fun readDetailCache(detailUrl: String): DriverDetail? {
+        val file = detailCacheFile(detailUrl)
+        if (!file.exists()) return null
+
+        return runCatching {
+            val root = JSONObject(file.readText())
+            if (isCacheExpired(root.optLong("timestamp", 0L))) return@runCatching null
+            val payload = root.optJSONObject("detail") ?: return@runCatching null
+            payload.toDriverDetail(fromCache = true)
+        }.getOrNull()
+    }
+
+    private fun writeDetailCache(detailUrl: String, detail: DriverDetail) {
+        runCatching {
+            val root = JSONObject()
+                .put("timestamp", System.currentTimeMillis())
+                .put("detail", detail.copy(summary = detail.summary.copy(isCached = false)).toJson())
+            detailCacheFile(detailUrl).writeText(root.toString())
         }
-
-        // Try list item "Label: value"
-        doc.select("li").forEach { li ->
-            val text = li.text().trim()
-            val lower = text.lowercase(Locale.getDefault())
-            if (labelSet.any { label -> lower.startsWith(label) }) {
-                val v = when {
-                    text.contains("：") -> text.substringAfter("：").trim()
-                    text.contains(":") -> text.substringAfter(":").trim()
-                    else -> ""
-                }
-                if (isAcceptableValue(v, maxLen, requireMatch)) return v
-            }
-        }
-
-
-
-        // Try label + span pattern (Intel banner blocks)
-        doc.select("label").forEach { label ->
-            val text = label.text().trim().lowercase(Locale.getDefault())
-            if (text in labelSet) {
-                val parent = label.parent()
-                val valueEl = parent?.selectFirst(".dc-page-banner-actions-action__value, span")
-                    ?: label.nextElementSibling()
-                val v = valueEl?.text()?.trim().orEmpty()
-                if (isAcceptableValue(v, maxLen, requireMatch)) return v
-            }
-        }
-
-        return ""
     }
 
-    private fun extractVersionFromText(doc: Document): String {
-        val h1 = doc.selectFirst("h1")?.text()?.trim().orEmpty()
-        val m1 = VERSION_REGEX.find(h1)
-        if (m1 != null) return m1.value
-
-        val text = doc.text()
-        val m2 = VERSION_REGEX.find(text)
-        return m2?.value.orEmpty()
+    private fun isCacheExpired(timestamp: Long): Boolean {
+        if (timestamp <= 0L) return true
+        return System.currentTimeMillis() - timestamp > CACHE_TTL_MS
     }
 
-    private fun extractDateFromText(doc: Document): String {
-        val text = doc.text()
-        val m = DATE_REGEX.find(text)
-        return m?.groupValues?.getOrNull(1).orEmpty()
+    private fun listCacheFile(lang: AppLang): File = File(cacheDirectory, "list_${lang.code}.json")
+
+    private fun detailCacheFile(detailUrl: String): File = File(cacheDirectory, "detail_${hashKey(detailUrl)}.json")
+
+    private fun hashKey(value: String): String {
+        return MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray())
+            .joinToString("") { "%02x".format(it) }
     }
-
-    private fun extractSizeFromText(doc: Document): String {
-        val text = doc.text()
-        val m = SIZE_REGEX.find(text)
-        return m?.value.orEmpty()
-    }
-
-    private fun extractSha256FromText(doc: Document): String {
-        val text = doc.text()
-        val m = SHA256_REGEX.find(text)
-        return m?.value.orEmpty()
-    }
-
-    private fun detectWhql(doc: Document): Boolean {
-        val text = doc.text()
-        if (text.contains("Non-WHQL", ignoreCase = true)) return false
-        if (text.contains("WHQL", ignoreCase = true)) return true
-        return false
-    }
-    private fun sanitizeVersion(value: String): String {
-        val v = value.trim()
-        if (v.isBlank()) return v
-        val m = VERSION_REGEX.find(v)
-        return m?.value ?: sanitizeValue(v)
-    }
-
-    private fun sanitizeValue(value: String, maxLen: Int = 80): String {
-        val clean = value.replace("\u00A0", " ").trim()
-        if (clean.length <= maxLen) return clean
-        return clean.take(maxLen)
-    }
-
-    private fun isAcceptableValue(value: String, maxLen: Int?, requireMatch: Regex?): Boolean {
-        val v = value.trim()
-        if (v.isBlank()) return false
-        if (maxLen != null && v.length > maxLen) return false
-        if (requireMatch != null && !requireMatch.containsMatchIn(v)) return false
-        return true
-    }
-
-    private fun extractJsonDetail(doc: Document): JsonDetail? {
-        for (script in doc.select("script")) {
-            val data = script.data().ifBlank { script.html() }
-            if (data.length < 50) continue
-            if (!data.contains("version", ignoreCase = true) &&
-                !data.contains("sha256", ignoreCase = true) &&
-                !data.contains("checksum", ignoreCase = true)
-            ) continue
-
-            val versionRaw = JSON_VERSION_REGEX.find(data)?.groupValues?.getOrNull(1)
-            val version = versionRaw?.let { sanitizeVersion(it) }?.takeIf { it.isNotBlank() }
-
-            val dateRaw = JSON_DATE_REGEX.find(data)?.groupValues?.getOrNull(1)
-            val date = dateRaw?.let { sanitizeValue(it, 40) }?.takeIf { it.isNotBlank() }
-
-            val sizeRaw = JSON_SIZE_REGEX.find(data)?.groupValues?.getOrNull(1)
-            val size = sizeRaw?.let { normalizeSize(it) }?.takeIf { it.isNotBlank() }
-
-
-
-            val sha = JSON_SHA256_REGEX.find(data)?.groupValues?.getOrNull(1)
-            val sha256 = sha?.let { it.trim() }?.takeIf { it.isNotBlank() }
-
-            val download = JSON_URL_REGEX.find(data)?.groupValues?.getOrNull(1)
-                ?.takeIf { it.contains("download", ignoreCase = true) }
-                ?.let { it.trim() }
-
-            if (version != null || date != null || size != null || sha256 != null || download != null) {
-                return JsonDetail(version, date, size, sha256, download)
-            }
-        }
-        return null
-    }
-
-    private fun extractMetaContent(doc: Document, names: List<String>): String {
-        for (name in names) {
-            val v = doc.selectFirst("meta[name=$name]")?.attr("content")?.trim().orEmpty()
-            if (v.isNotBlank()) return v
-        }
-        return ""
-    }
-
-    private fun extractMetaDate(doc: Document): String {
-        val raw = extractMetaContent(doc, listOf("LastUpdate", "lastModifieddate"))
-        val match = DATE_VALUE_REGEX.find(raw)
-        return match?.value.orEmpty()
-    }
-
 
     private fun toAbsoluteUrl(doc: Document, value: String): String {
-        if (value.startsWith("http://", true) || value.startsWith("https://", true)) return value
+        if (value.startsWith("http://", ignoreCase = true) || value.startsWith("https://", ignoreCase = true)) {
+            return value
+        }
         return runCatching { URI(doc.baseUri()).resolve(value).toString() }.getOrDefault(value)
     }
 
-    private fun extractDownloadUrl(doc: Document): String {
-        val buttonUrl = doc.select("button[data-href]")
-            .mapNotNull { it.attr("data-href")?.trim() }
-            .firstOrNull { it.contains("download", ignoreCase = true) || it.endsWith(".exe", true) }
-            .orEmpty()
+    private fun urlsEquivalent(left: String, right: String): Boolean {
+        return normalizeUrl(left) == normalizeUrl(right)
+    }
 
-        if (buttonUrl.isNotBlank()) {
-            return if (buttonUrl.startsWith("http", ignoreCase = true)) {
-                buttonUrl
-            } else {
-                runCatching { URI(doc.baseUri()).resolve(buttonUrl).toString() }.getOrDefault(buttonUrl)
-            }
+    private fun normalizeUrl(url: String): String {
+        return url.trim().removeSuffix("/")
+    }
+
+    private fun normalizeIntelUrl(url: String): String {
+        if (url.isBlank()) return url
+        return normalizeUrl(toIntelComUrl(url))
+    }
+
+    private fun toIntelComUrl(url: String): String {
+        if (url.isBlank()) return url
+        return url
+            .replace("https://www.intel.cn/", HOME_URL)
+            .replace("https://www.intel.com.tw/", HOME_URL)
+            .replace("https://intel.cn/", HOME_URL)
+            .replace("https://intel.com.tw/", HOME_URL)
+    }
+
+    private fun localeForUrl(url: String): LocaleHeaders = when {
+        url.contains("/content/www/cn/zh/") -> LocaleHeaders(
+            acceptLanguage = "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            referer = "https://www.intel.com/content/www/cn/zh/"
+        )
+        url.contains("/content/www/tw/zh/") -> LocaleHeaders(
+            acceptLanguage = "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            referer = "https://www.intel.com/content/www/tw/zh/"
+        )
+        else -> LocaleHeaders(
+            acceptLanguage = "en-US,en;q=0.9",
+            referer = "https://www.intel.com/content/www/us/en/"
+        )
+    }
+
+    private fun isWhqlText(text: String): Boolean {
+        return text.contains("WHQL", ignoreCase = true) && !text.contains("Non-WHQL", ignoreCase = true)
+    }
+
+    private fun DriverSummary.toJson(): JSONObject = JSONObject()
+        .put("version", version)
+        .put("date", date)
+        .put("size", size)
+        .put("sha256", sha256)
+        .put("whqlCertified", whqlCertified)
+        .put("detailUrl", detailUrl)
+        .put("downloadUrl", downloadUrl)
+
+    private fun JSONObject.toDriverSummary(fromCache: Boolean): DriverSummary = DriverSummary(
+        version = optString("version", "Unknown"),
+        date = optString("date", "Unknown"),
+        size = optString("size", "Unknown"),
+        sha256 = optString("sha256", "Unknown"),
+        whqlCertified = optBoolean("whqlCertified", false),
+        detailUrl = optString("detailUrl", ""),
+        downloadUrl = optString("downloadUrl", ""),
+        isCached = fromCache
+    )
+
+    private fun JSONArray.toDriverSummaryList(fromCache: Boolean): List<DriverSummary> = buildList {
+        for (index in 0 until length()) {
+            val obj = optJSONObject(index) ?: continue
+            add(obj.toDriverSummary(fromCache = fromCache))
         }
-
-        val anchorUrl = doc.select("a[href]")
-            .mapNotNull { it.absUrl("href") }
-            .firstOrNull { it.contains("download", ignoreCase = true) }
-            .orEmpty()
-
-        return anchorUrl
     }
 
+    private fun DriverDetail.toJson(): JSONObject = JSONObject()
+        .put("summary", summary.toJson())
+        .put("introductionHtml", introductionHtml)
+        .put("availableDownloadsHtml", availableDownloadsHtml)
+        .put("detailedDescriptionHtml", detailedDescriptionHtml)
+        .put("validProductsHtml", validProductsHtml)
 
-    private fun normalizeSize(raw: String): String {
-        val v = raw.trim()
-        if (v.isBlank()) return v
-        if (SIZE_REGEX.containsMatchIn(v)) return v
-        val digits = v.filter { it.isDigit() }
-        val bytes = digits.toLongOrNull()
-        if (bytes != null && bytes > 0) {
-            val mb = bytes.toDouble() / (1024.0 * 1024.0)
-            return String.format(Locale.US, "%.1f MB", mb)
-        }
-        return v
-    }
-
-    private fun extractSectionHtml(doc: Document, labels: List<String>): String {
-        val heading = doc.select("h1,h2,h3,h4,h5,p,strong").firstOrNull { el ->
-            labels.any { label -> el.text().contains(label, ignoreCase = true) }
-        } ?: return ""
-
-        val sb = StringBuilder()
-        var el: Element? = heading.nextElementSibling()
-        while (el != null && !isSectionHeading(el)) {
-            sb.append(el.outerHtml())
-            el = el.nextElementSibling()
-        }
-        return sb.toString()
-    }
-
-    private fun isSectionHeading(el: Element): Boolean {
-        if (el.tagName().matches(Regex("h[1-6]", RegexOption.IGNORE_CASE))) return true
-        val text = el.text()
-        val allLabels = INTRO_LABELS + DOWNLOADS_LABELS + DETAIL_LABELS + VALID_LABELS
-        return allLabels.any { label -> text.contains(label, ignoreCase = true) }
-    }
-
-    private fun isChinese(): Boolean {
-        val lang = Locale.getDefault().language
-        return lang.startsWith("zh")
+    private fun JSONObject.toDriverDetail(fromCache: Boolean): DriverDetail {
+        val summaryObject = optJSONObject("summary") ?: JSONObject()
+        return DriverDetail(
+            summary = summaryObject.toDriverSummary(fromCache = fromCache),
+            introductionHtml = optString("introductionHtml", ""),
+            availableDownloadsHtml = optString("availableDownloadsHtml", ""),
+            detailedDescriptionHtml = optString("detailedDescriptionHtml", ""),
+            validProductsHtml = optString("validProductsHtml", "")
+        )
     }
 
     companion object {
-        private const val EN_URL = "https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html"
-        private const val CN_URL = "https://www.intel.cn/content/www/cn/zh/download/785597/intel-arc-graphics-windows.html"
-        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        private const val ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
+        private const val HOME_URL = "https://www.intel.com/"
+        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         private const val ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
         private const val MAX_VERSIONS = 8
+        private const val MAX_FETCH_ATTEMPTS = 2
+        private const val RETRY_DELAY_MS = 1200L
+        private const val REQUEST_SPACING_MS = 350L
+        private const val CACHE_TTL_MS = 6L * 60L * 60L * 1000L
 
-        private val INTRO_LABELS = listOf("Introduction", "介绍")
-        private val DOWNLOADS_LABELS = listOf("Available Downloads", "可供下载")
-        private val DETAIL_LABELS = listOf("Detailed Description", "详细说明")
-        private val VALID_LABELS = listOf("This download is valid for the product(s) listed below", "此下载对下面列出的产品有效")
-
+        private val RETRYABLE_HTTP_CODES = setOf(403, 429)
+        private val HEADING_TAG_REGEX = Regex("h[1-6]", RegexOption.IGNORE_CASE)
         private val VERSION_REGEX = Regex("\\b\\d+\\.\\d+\\.\\d+\\.\\d+\\b")
-        private val DATE_VALUE_REGEX = Regex(
-            "\\b([A-Za-z]{3,9}\\s+\\d{1,2},\\s+\\d{4}|\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}/\\d{1,2}/\\d{4})\\b"
-        )
-        private val DATE_REGEX = Regex("(?:Date|日期)\\s*[:：]?\\s*([A-Za-z]{3,9}\\s+\\d{1,2},\\s+\\d{4}|\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}/\\d{1,2}/\\d{4})")
-        private val SIZE_REGEX = Regex("\\b\\d+(?:\\.\\d+)?\\s*(?:MB|GB)\\b", RegexOption.IGNORE_CASE)
+        private val SIZE_REGEX = Regex("\\b\\d+(?:,\\d{3})*(?:\\.\\d+)?\\s*(?:MB|GB)\\b", RegexOption.IGNORE_CASE)
         private val SHA256_REGEX = Regex("\\b[A-Fa-f0-9]{64}\\b")
-
-        private val JSON_VERSION_REGEX = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"", RegexOption.IGNORE_CASE)
-        private val JSON_DATE_REGEX = Regex("\"(?:releaseDate|date)\"\\s*:\\s*\"([^\"]+)\"", RegexOption.IGNORE_CASE)
-        private val JSON_SIZE_REGEX = Regex("\"(?:fileSize|size)\"\\s*:\\s*\"?([^\"]+?)\"?(?:,|\\})", RegexOption.IGNORE_CASE)
-        private val JSON_SHA256_REGEX = Regex("\"sha256\"\\s*:\\s*\"([A-Fa-f0-9]{64})\"", RegexOption.IGNORE_CASE)
-        private val JSON_URL_REGEX = Regex("\"(https?://[^\"]+)\"", RegexOption.IGNORE_CASE)
     }
+}
+
+enum class AppLang(val code: String, val displayName: String, val baseUrl: String) {
+    ZH_CN("zh_CN", "\u7b80\u4f53\u4e2d\u6587", "https://www.intel.com/content/www/cn/zh/download/785597/intel-arc-graphics-windows.html"),
+    ZH_TW("zh_TW", "\u7e41\u9ad4\u4e2d\u6587", "https://www.intel.com/content/www/tw/zh/download/785597/intel-arc-graphics-windows.html"),
+    EN("en", "English", "https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html")
 }
 
 private data class DetailEntry(
     val url: String,
+    val version: String,
     val whqlCertified: Boolean
 )
-private data class JsonDetail(
-    val version: String?,
-    val date: String?,
-    val size: String?,
-    val sha256: String?,
-    val downloadUrl: String?
+
+private data class LocaleHeaders(
+    val acceptLanguage: String,
+    val referer: String
 )
 
 private class InMemoryCookieJar : CookieJar {
@@ -515,21 +499,3 @@ private class InMemoryCookieJar : CookieJar {
         return store[url.host] ?: emptyList()
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

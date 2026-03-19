@@ -7,7 +7,8 @@ data class DriverSummary(
     val sha256: String,
     val whqlCertified: Boolean,
     val detailUrl: String,
-    val downloadUrl: String
+    val downloadUrl: String,
+    val isCached: Boolean = false
 )
 
 data class DriverDetail(
