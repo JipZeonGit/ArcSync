@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
 }
@@ -15,6 +15,27 @@ android {
         versionName = "1.0.0"
     }
 
+    val releaseStoreFile = System.getenv("ARC_RELEASE_STORE_FILE")
+    val releaseStorePassword = System.getenv("ARC_RELEASE_STORE_PASSWORD")
+    val releaseKeyAlias = System.getenv("ARC_RELEASE_KEY_ALIAS")
+    val releaseKeyPassword = System.getenv("ARC_RELEASE_KEY_PASSWORD")
+
+    signingConfigs {
+        if (
+            !releaseStoreFile.isNullOrBlank() &&
+            !releaseStorePassword.isNullOrBlank() &&
+            !releaseKeyAlias.isNullOrBlank() &&
+            !releaseKeyPassword.isNullOrBlank()
+        ) {
+            create("release") {
+                storeFile = file(releaseStoreFile)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -22,6 +43,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfigs.findByName("release")?.let {
+                signingConfig = it
+            }
         }
     }
 
@@ -70,6 +94,3 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
-
-
-

@@ -1,0 +1,49 @@
+﻿name: Android Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.ARC_RELEASE_KEYSTORE_BASE64 }}" | base64 --decode > app/arcsync-release.jks
+
+      - name: Build signed release APK
+        env:
+          ARC_RELEASE_STORE_FILE: app/arcsync-release.jks
+          ARC_RELEASE_STORE_PASSWORD: ${{ secrets.ARC_RELEASE_STORE_PASSWORD }}
+          ARC_RELEASE_KEY_ALIAS: ${{ secrets.ARC_RELEASE_KEY_ALIAS }}
+          ARC_RELEASE_KEY_PASSWORD: ${{ secrets.ARC_RELEASE_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Prepare asset
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk ArcSync-${{ github.ref_name }}.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ArcSync-${{ github.ref_name }}.apk
+          generate_release_notes: true
