@@ -35,7 +35,7 @@ jobs:
 
       - name: Build signed release APK
         env:
-          ARC_RELEASE_STORE_FILE: app/arcsync-release.jks
+          ARC_RELEASE_STORE_FILE: ${{ github.workspace }}/app/arcsync-release.jks
           ARC_RELEASE_STORE_PASSWORD: ${{ secrets.ARC_RELEASE_STORE_PASSWORD }}
           ARC_RELEASE_KEY_ALIAS: ${{ secrets.ARC_RELEASE_KEY_ALIAS }}
           ARC_RELEASE_KEY_PASSWORD: ${{ secrets.ARC_RELEASE_KEY_PASSWORD }}
@@ -50,3 +50,4 @@ jobs:
         with:
           files: ArcSync-${{ github.ref_name }}.apk
           generate_release_notes: true
+
