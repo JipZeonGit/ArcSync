@@ -39,3 +39,11 @@ github-store-reference/
 
 # Scraper Test Data
 scraper-test-data/
+# Reference files
+reference/
+
+# VS Code
+.vscode/
+
+# Local Gradle user data
+.gradle-user/
