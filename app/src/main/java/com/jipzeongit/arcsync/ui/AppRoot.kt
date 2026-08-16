@@ -2,6 +2,8 @@ package com.jipzeongit.arcsync.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -21,7 +23,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Settings
@@ -43,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -59,6 +61,22 @@ import com.jipzeongit.arcsync.data.SettingsRepository
 import com.jipzeongit.arcsync.ui.screens.DriverDetailScreen
 import com.jipzeongit.arcsync.ui.screens.DriversScreen
 import com.jipzeongit.arcsync.ui.screens.SettingsScreen
+import com.jipzeongit.arcsync.ui.components.liquid.LiquidBottomTabs
+import com.jipzeongit.arcsync.ui.components.liquid.LiquidBottomTab
+
+// Backdrop imports
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.InnerShadow
+import com.kyant.backdrop.shadow.Shadow
+import com.kyant.shapes.Capsule
 
 @Composable
 fun AppRoot(settingsRepository: SettingsRepository) {
@@ -74,6 +92,11 @@ fun AppRoot(settingsRepository: SettingsRepository) {
     val statusBarTopPadding = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
     val mainContentTopPadding = statusBarTopPadding + MainTopBarHeight + MainContentGap
 
+    var topBarElevated by remember(currentRoute) { mutableStateOf(false) }
+
+    // 全局 Backdrop 实例
+    val backdrop = rememberLayerBackdrop()
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0)
@@ -83,7 +106,7 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // 页面内容
+            // 页面内容 - 不使用 layerBackdrop，避免崩溃
             NavHost(
                 navController = navController,
                 startDestination = Routes.DRIVERS,
@@ -101,7 +124,7 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                         onOpenDownload = { url ->
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                         },
-                        onScrolledChange = { }
+                        onScrolledChange = { topBarElevated = it }
                     )
                 }
 
@@ -109,7 +132,7 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                     SettingsScreen(
                         settingsRepository = settingsRepository,
                         onLangChanged = { },
-                        onScrolledChange = { }
+                        onScrolledChange = { topBarElevated = it }
                     )
                 }
 
@@ -130,28 +153,15 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                 }
             }
 
-            // 顶部导航栏（保留原有效果）
+            // 顶部标题栏
             if (showMainChrome) {
-                GlassTopBar(
-                    currentRoute = currentRoute,
-                    driversLabel = appLang.driversLabel,
-                    settingsLabel = appLang.settingsLabel,
-                    onNavigate = { route ->
-                        navController.navigate(route) {
-                            popUpTo(Routes.DRIVERS) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
-                    modifier = Modifier
-                        .statusBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                )
+                MainTopBar(elevated = topBarElevated)
             }
 
-            // 底部导航栏 - 简化版玻璃效果
+            // 底部导航栏 - 使用 backdrop，但不使用 layerBackdrop
             if (showMainChrome) {
-                GlassBottomBar(
+                LiquidGlassBottomBar(
+                    backdrop = backdrop,
                     currentRoute = currentRoute,
                     appLang = appLang,
                     onNavigate = { route ->
@@ -164,7 +174,7 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
                 )
             }
         }
@@ -172,77 +182,43 @@ fun AppRoot(settingsRepository: SettingsRepository) {
 }
 
 @Composable
-private fun GlassTopBar(
-    currentRoute: String?,
-    driversLabel: String,
-    settingsLabel: String,
-    onNavigate: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(MainTopBarHeight)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f))
-            .padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        TopBarItem(
-            icon = if (currentRoute == Routes.DRIVERS) Icons.Filled.Build else Icons.Outlined.Build,
-            label = driversLabel,
-            isSelected = currentRoute == Routes.DRIVERS,
-            onClick = { onNavigate(Routes.DRIVERS) }
-        )
-        TopBarItem(
-            icon = if (currentRoute == Routes.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
-            label = settingsLabel,
-            isSelected = currentRoute == Routes.SETTINGS,
-            onClick = { onNavigate(Routes.SETTINGS) }
-        )
-    }
-}
+private fun MainTopBar(elevated: Boolean) {
+    val containerColor by animateColorAsState(
+        targetValue = if (elevated) {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+        } else {
+            MaterialTheme.colorScheme.background
+        },
+        animationSpec = tween(durationMillis = 220),
+        label = "topBarContainer"
+    )
 
-@Composable
-private fun TopBarItem(
-    icon: ImageVector,
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
     Column(
         modifier = Modifier
-            .clip(CircleShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+            .fillMaxWidth()
+            .background(containerColor)
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            modifier = Modifier.size(22.dp),
-            tint = if (isSelected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            }
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (isSelected) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            }
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .height(MainTopBarHeight)
+                .padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Arc Sync",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
     }
 }
 
 @Composable
-private fun GlassBottomBar(
+private fun LiquidGlassBottomBar(
+    backdrop: LayerBackdrop,
     currentRoute: String?,
     appLang: AppLang,
     onNavigate: (String) -> Unit,
@@ -252,58 +228,37 @@ private fun GlassBottomBar(
     val selectedIndex = navItems.indexOfFirst { it.route == currentRoute }.coerceAtLeast(0)
     val isLightTheme = !isSystemInDarkTheme()
 
-    // 配色 - 模拟玻璃效果
     val accentColor = if (isLightTheme) Color(0xFF0088FF) else Color(0xFF0091FF)
-    val bgColor = if (isLightTheme) {
-        Color(0xFFF0F0F0).copy(alpha = 0.85f)
-    } else {
-        Color(0xFF1A1A1A).copy(alpha = 0.85f)
-    }
-    val indicatorColor = if (isLightTheme) {
-        Color.White.copy(alpha = 0.7f)
-    } else {
-        Color(0xFF2A2A2A).copy(alpha = 0.7f)
-    }
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .clip(RoundedCornerShape(28.dp))
-            .background(bgColor)
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
+    LiquidBottomTabs(
+        selectedTabIndex = { selectedIndex },
+        onTabSelected = { index -> onNavigate(navItems[index].route) },
+        backdrop = backdrop,
+        tabsCount = navItems.size,
+        modifier = modifier.fillMaxWidth()
     ) {
         navItems.forEachIndexed { index, item ->
-            val isSelected = index == selectedIndex
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(if (isSelected) indicatorColor else Color.Transparent)
-                    .clickable { onNavigate(item.route) },
-                contentAlignment = Alignment.Center
+            LiquidBottomTab(
+                onClick = { onNavigate(item.route) }
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isSelected) item.iconFilled else item.iconOutlined,
-                        contentDescription = null,
-                        modifier = Modifier.size(22.dp),
-                        tint = if (isSelected) accentColor
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    )
-                    Text(
-                        text = item.label(appLang),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isSelected) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    )
-                }
+                val isSelected = index == selectedIndex
+                Icon(
+                    imageVector = if (isSelected) item.iconFilled else item.iconOutlined,
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp),
+                    tint = if (isSelected) accentColor else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    }
+                )
+                Text(
+                    text = item.label(appLang),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    }
+                )
             }
         }
     }

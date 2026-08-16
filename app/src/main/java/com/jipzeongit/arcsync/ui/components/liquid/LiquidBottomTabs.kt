@@ -1,6 +1,5 @@
 package com.jipzeongit.arcsync.ui.components.liquid
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -12,11 +11,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.shadow.Shadow
 import com.kyant.shapes.Capsule
 
 @Composable
@@ -30,41 +34,76 @@ fun LiquidBottomTabs(
 ) {
     val isLightTheme = !isSystemInDarkTheme()
     val containerColor = if (isLightTheme) {
-        Color(0xFFEEEEEE).copy(alpha = 0.85f)
+        Color(0xFFFAFAFA).copy(alpha = 0.4f)
     } else {
-        Color(0xFF1E1E1E).copy(alpha = 0.85f)
+        Color(0xFF121212).copy(alpha = 0.4f)
     }
 
     BoxWithConstraints(
         modifier,
-        contentAlignment = Alignment.CenterStart
+        contentAlignment = Alignment.Center
     ) {
-        // 容器 - 简化版，不使用 Backdrop 效果
-        Row(
-            Modifier
-                .clip(Capsule())
-                .background(containerColor)
-                .height(56f.dp)
-                .fillMaxWidth()
-                .padding(horizontal = 4f.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            content = content
-        )
+        val density = LocalDensity.current
+        val maxWidthPx = constraints.maxWidth.toFloat()
+        val horizontalPaddingPx = maxWidthPx * 0.25f
+        val horizontalPaddingDp = with(density) { horizontalPaddingPx.toDp() }
+        val tabWidthPx = (maxWidthPx - horizontalPaddingPx * 2) / tabsCount
 
-        // 选中指示器
         Box(
-            Modifier
-                .padding(horizontal = 4f.dp)
-                .graphicsLayer {
-                    translationX = selectedTabIndex().toFloat() * (constraints.maxWidth.toFloat() / tabsCount)
-                }
-                .clip(Capsule())
-                .background(
-                    if (isLightTheme) Color.White.copy(alpha = 0.7f)
-                    else Color(0xFF333333).copy(alpha = 0.7f)
-                )
-                .height(56f.dp)
-                .fillMaxWidth(1f / tabsCount)
-        )
+            modifier = Modifier
+                .padding(horizontal = horizontalPaddingDp)
+        ) {
+            // 背景层 - 透明模糊，固定高度
+            Box(
+                Modifier
+                    .height(60.dp)
+                    .fillMaxWidth()
+                    .alpha(0f)
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { Capsule() },
+                        effects = {
+                            blur(12f.dp.toPx())
+                        },
+                        onDrawSurface = { drawRect(containerColor) }
+                    )
+            )
+
+            // 内容层 - 正常显示图标和文字
+            Row(
+                Modifier
+                    .height(60.dp)
+                    .fillMaxWidth()
+                    .padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = content
+            )
+
+            // 选中指示器 - 使用 backdrop
+            Box(
+                Modifier
+                    .padding(4.dp)
+                    .graphicsLayer {
+                        translationX = selectedTabIndex().toFloat() * tabWidthPx
+                    }
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { Capsule() },
+                        effects = {
+                            blur(8f.dp.toPx())
+                        },
+                        highlight = { Highlight.Default.copy(alpha = 0.5f) },
+                        shadow = { Shadow(alpha = 0.3f) },
+                        onDrawSurface = {
+                            drawRect(
+                                if (isLightTheme) Color.Black.copy(0.08f)
+                                else Color.White.copy(0.08f)
+                            )
+                        }
+                    )
+                    .height(52.dp)
+                    .fillMaxWidth(1f / tabsCount)
+            )
+        }
     }
 }
