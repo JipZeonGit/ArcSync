@@ -58,14 +58,14 @@ import com.jipzeongit.arcsync.data.SettingsRepository
 import com.jipzeongit.arcsync.ui.screens.DriverDetailScreen
 import com.jipzeongit.arcsync.ui.screens.DriversScreen
 import com.jipzeongit.arcsync.ui.screens.SettingsScreen
+import com.jipzeongit.arcsync.ui.components.liquid.LiquidBottomTabs
+import com.jipzeongit.arcsync.ui.components.liquid.LiquidBottomTab
 
 // Backdrop imports
 import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.rememberBackdrop
+import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
-import com.kyant.backdrop.catalog.components.LiquidBottomTabs
-import com.kyant.backdrop.catalog.components.LiquidBottomTab
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
@@ -90,7 +90,7 @@ fun AppRoot(settingsRepository: SettingsRepository) {
     val mainContentTopPadding = statusBarTopPadding + MainTopBarHeight + MainContentGap
 
     // 全局 Backdrop 实例
-    val backdrop = rememberBackdrop()
+    val backdrop = rememberLayerBackdrop()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -100,7 +100,7 @@ fun AppRoot(settingsRepository: SettingsRepository) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .backdrop(backdrop)
+                .layerBackdrop(backdrop)  // 将 backdrop 应用到内容层
         ) {
             // 页面内容
             NavHost(
@@ -114,16 +114,21 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                     DriversScreen(
                         viewModel = viewModel,
                         appLang = appLang,
-                        onDriverClick = { driver ->
-                            navController.navigate("${Routes.DETAIL}?url=${Uri.encode(driver.detailUrl)}")
-                        }
+                        onOpenDetail = { url ->
+                            navController.navigate("${Routes.DETAIL}?url=${Uri.encode(url)}")
+                        },
+                        onOpenDownload = { url ->
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        },
+                        onScrolledChange = { /* handled by screen */ }
                     )
                 }
 
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
                         settingsRepository = settingsRepository,
-                        appLang = appLang
+                        onLangChanged = { /* handled by repository */ },
+                        onScrolledChange = { /* handled by screen */ }
                     )
                 }
 
@@ -133,14 +138,18 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                 ) { backStackEntry ->
                     val url = backStackEntry.arguments?.getString("url") ?: ""
                     DriverDetailScreen(
-                        url = url,
+                        viewModel = viewModel,
                         appLang = appLang,
-                        onBack = { navController.popBackStack() }
+                        detailUrl = url,
+                        onBack = { navController.popBackStack() },
+                        onOpenUrl = { openUrl ->
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(openUrl)))
+                        }
                     )
                 }
             }
 
-            // 顶部导航栏（保留原有效果）
+            // 顶部导航栏
             if (showMainChrome) {
                 GlassTopBar(
                     currentRoute = currentRoute,
@@ -254,7 +263,7 @@ private fun TopBarItem(
 
 @Composable
 private fun LiquidGlassBottomBar(
-    backdrop: Backdrop,
+    backdrop: LayerBackdrop,
     currentRoute: String?,
     appLang: AppLang,
     onNavigate: (String) -> Unit,
@@ -266,11 +275,6 @@ private fun LiquidGlassBottomBar(
 
     // 液态玻璃配色
     val accentColor = if (isLightTheme) Color(0xFF0088FF) else Color(0xFF0091FF)
-    val containerColor = if (isLightTheme) {
-        Color(0xFFFAFAFA).copy(alpha = 0.4f)
-    } else {
-        Color(0xFF121212).copy(alpha = 0.4f)
-    }
 
     LiquidBottomTabs(
         selectedTabIndex = { selectedIndex },

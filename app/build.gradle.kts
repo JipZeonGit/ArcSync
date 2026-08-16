@@ -75,10 +75,12 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     
-    // Compose - JetBrains 版本 (直接声明)
+    // Compose - JetBrains 版本
     implementation(libs.compose.foundation)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
+    
+    // Material3 - AndroidX 版本
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
     
