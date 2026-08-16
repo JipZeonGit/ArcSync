@@ -1,16 +1,17 @@
-﻿plugins {
+plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.jetbrains.compose)
 }
 
 android {
     namespace = "com.jipzeongit.arcsync"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.jipzeongit.arcsync"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 3
         versionName = "1.0.2"
     }
@@ -54,17 +55,13 @@ android {
         compose = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = libs.versions.compose.compiler.get()
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        jvmToolchain(17)
     }
 
     packaging {
@@ -77,12 +74,18 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
+    
+    // Compose - JetBrains 版本 (直接声明)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons)
+    
+    // Backdrop - 液态玻璃效果
+    implementation(libs.kyant.backdrop)
+    implementation(libs.kyant.shapes)
+    
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -92,7 +95,5 @@ dependencies {
     implementation(libs.jsoup)
     implementation(libs.okhttp)
 
-    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("org.jetbrains.compose.ui:ui-tooling:1.11.1")
 }
-
-
