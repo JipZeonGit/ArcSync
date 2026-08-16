@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Settings
@@ -58,22 +59,6 @@ import com.jipzeongit.arcsync.data.SettingsRepository
 import com.jipzeongit.arcsync.ui.screens.DriverDetailScreen
 import com.jipzeongit.arcsync.ui.screens.DriversScreen
 import com.jipzeongit.arcsync.ui.screens.SettingsScreen
-import com.jipzeongit.arcsync.ui.components.liquid.LiquidBottomTabs
-import com.jipzeongit.arcsync.ui.components.liquid.LiquidBottomTab
-
-// Backdrop imports
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
-import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.shadow.InnerShadow
-import com.kyant.backdrop.shadow.Shadow
-import com.kyant.shapes.Capsule
 
 @Composable
 fun AppRoot(settingsRepository: SettingsRepository) {
@@ -89,9 +74,6 @@ fun AppRoot(settingsRepository: SettingsRepository) {
     val statusBarTopPadding = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
     val mainContentTopPadding = statusBarTopPadding + MainTopBarHeight + MainContentGap
 
-    // 全局 Backdrop 实例
-    val backdrop = rememberLayerBackdrop()
-
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0)
@@ -100,7 +82,6 @@ fun AppRoot(settingsRepository: SettingsRepository) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .layerBackdrop(backdrop)  // 将 backdrop 应用到内容层
         ) {
             // 页面内容
             NavHost(
@@ -120,15 +101,15 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                         onOpenDownload = { url ->
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
                         },
-                        onScrolledChange = { /* handled by screen */ }
+                        onScrolledChange = { }
                     )
                 }
 
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
                         settingsRepository = settingsRepository,
-                        onLangChanged = { /* handled by repository */ },
-                        onScrolledChange = { /* handled by screen */ }
+                        onLangChanged = { },
+                        onScrolledChange = { }
                     )
                 }
 
@@ -149,7 +130,7 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                 }
             }
 
-            // 顶部导航栏
+            // 顶部导航栏（保留原有效果）
             if (showMainChrome) {
                 GlassTopBar(
                     currentRoute = currentRoute,
@@ -168,10 +149,9 @@ fun AppRoot(settingsRepository: SettingsRepository) {
                 )
             }
 
-            // 底部导航栏 - 液态玻璃效果
+            // 底部导航栏 - 简化版玻璃效果
             if (showMainChrome) {
-                LiquidGlassBottomBar(
-                    backdrop = backdrop,
+                GlassBottomBar(
                     currentRoute = currentRoute,
                     appLang = appLang,
                     onNavigate = { route ->
@@ -262,8 +242,7 @@ private fun TopBarItem(
 }
 
 @Composable
-private fun LiquidGlassBottomBar(
-    backdrop: LayerBackdrop,
+private fun GlassBottomBar(
     currentRoute: String?,
     appLang: AppLang,
     onNavigate: (String) -> Unit,
@@ -273,38 +252,58 @@ private fun LiquidGlassBottomBar(
     val selectedIndex = navItems.indexOfFirst { it.route == currentRoute }.coerceAtLeast(0)
     val isLightTheme = !isSystemInDarkTheme()
 
-    // 液态玻璃配色
+    // 配色 - 模拟玻璃效果
     val accentColor = if (isLightTheme) Color(0xFF0088FF) else Color(0xFF0091FF)
+    val bgColor = if (isLightTheme) {
+        Color(0xFFF0F0F0).copy(alpha = 0.85f)
+    } else {
+        Color(0xFF1A1A1A).copy(alpha = 0.85f)
+    }
+    val indicatorColor = if (isLightTheme) {
+        Color.White.copy(alpha = 0.7f)
+    } else {
+        Color(0xFF2A2A2A).copy(alpha = 0.7f)
+    }
 
-    LiquidBottomTabs(
-        selectedTabIndex = { selectedIndex },
-        onTabSelected = { index -> onNavigate(navItems[index].route) },
-        backdrop = backdrop,
-        tabsCount = navItems.size,
-        modifier = modifier.fillMaxWidth()
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(bgColor)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         navItems.forEachIndexed { index, item ->
-            LiquidBottomTab(
-                onClick = { onNavigate(item.route) }
+            val isSelected = index == selectedIndex
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(if (isSelected) indicatorColor else Color.Transparent)
+                    .clickable { onNavigate(item.route) },
+                contentAlignment = Alignment.Center
             ) {
-                val isSelected = index == selectedIndex
-                Icon(
-                    imageVector = if (isSelected) item.iconFilled else item.iconOutlined,
-                    contentDescription = null,
-                    modifier = Modifier.size(22.dp),
-                    tint = if (isSelected) accentColor else {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    }
-                )
-                Text(
-                    text = item.label(appLang),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    }
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isSelected) item.iconFilled else item.iconOutlined,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = if (isSelected) accentColor
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                    Text(
+                        text = item.label(appLang),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isSelected) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                }
             }
         }
     }
